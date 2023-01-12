@@ -1,0 +1,88 @@
+---
+title: "Homework - Week 01"
+format: html
+editor: visual
+---
+
+```{r}
+library(magrittr)
+library(glue)
+library(ggplot2)
+```
+
+
+# WEEK 1 PROBLEMS
+
+## Problem 00
+
+For your own good, it would be helpful to review the EASY problems at the end of Chapters 1, 2 and 3 (2nd edition). The answers
+are in the solutions guide.
+
+## Problem 01
+
+1. Suppose the globe tossing data (Lecture 2, Chapter 2) had turned out to be 4 water and 11 land. Construct the posterior distribution.
+
+```{r}
+compute_posterior <- function(W, L, precision_step=100){
+  N <- W + L
+  p <- seq(0, 1, length.out = 100)
+  
+  # P(p|W,L) = P(W,L|p)P(p) / P(W,L)
+  likelihood <- sapply(p, function(x) dbinom(W, N, x))
+  posterior = likelihood * p / sum(likelihood * p)
+  return(posterior)
+}
+```
+
+
+```{r 01_solution}
+W <- 4
+L <- 11
+posterior = compute_posterior(W, L, 100)
+
+# Plot function approximation
+ggplot() +
+  geom_line(aes(x=p, y=posterior)) +
+  geom_point(aes(x=p, y=posterior)) +
+  labs(x = "Proportion of water",
+       y = "Posterior probability",
+       title = glue("Posterior probability for W = {W} and L = {L}"))
+
+```
+
+```{r 01_book_example}
+W <- 6
+L <- 3
+posterior = compute_posterior(W, L, 100)
+
+ggplot() +
+  geom_line(aes(x=p, y=posterior)) +
+  geom_point(aes(x=p, y=posterior)) +
+  labs(x = "Proportion of water",
+       y = "Posterior probability",
+       title = glue("Posterior probability for W = {W} and L = {L}"))
+
+```
+## Problem 02
+
+2. Using the posterior distribution from 1, compute the posterior predictive distribution for the next 5 tosses of the same globe. I recommend you use the sampling method.
+
+## Problem 03
+
+3. Use the posterior predictive distribution from 2 to calculate the probability of 3 or more water samples in the next 5 tosses.
+
+## Problem 04
+4-OPTIONAL. This problem is an optional challenge for people who are taking the course for a second or third time. Suppose you observe W = 5 water points, but you forgot to write down how many times the globe was tossed, so you don’t know the number of land points L. Assume that p = 0.7 and compute the posterior distribution of the number of tosses N. Hint: Use the binomial distribution.
+
+```{r}
+1 + 1
+```
+
+You can add options to executable code like this
+
+```{r}
+#| echo: false
+2 * 2
+```
+
+The `echo: false` option disables the printing of code (only output is displayed).
