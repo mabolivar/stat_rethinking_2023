@@ -35,10 +35,28 @@ compute_posterior <- function(W, L, precision_step=100){
 ```
 
 
+```{r 01_book_example}
+W <- 6
+L <- 3
+precision <- 100
+posterior = compute_posterior(W, L, precision)
+p <- seq(0, 1, length.out = precision)
+
+ggplot() +
+  geom_line(aes(x=p, y=posterior)) +
+  geom_point(aes(x=p, y=posterior)) +
+  labs(x = "Proportion of water",
+       y = "Posterior probability",
+       title = glue("Posterior probability for W = {W} and L = {L}"))
+
+```
+
 ```{r 01_solution}
 W <- 4
 L <- 11
-posterior = compute_posterior(W, L, 100)
+precision <- 100
+posterior = compute_posterior(W, L, precision)
+p <- seq(0, 1, length.out = precision)
 
 # Plot function approximation
 ggplot() +
@@ -50,22 +68,48 @@ ggplot() +
 
 ```
 
-```{r 01_book_example}
-W <- 6
-L <- 3
-posterior = compute_posterior(W, L, 100)
-
-ggplot() +
-  geom_line(aes(x=p, y=posterior)) +
-  geom_point(aes(x=p, y=posterior)) +
-  labs(x = "Proportion of water",
-       y = "Posterior probability",
-       title = glue("Posterior probability for W = {W} and L = {L}"))
-
-```
 ## Problem 02
 
 2. Using the posterior distribution from 1, compute the posterior predictive distribution for the next 5 tosses of the same globe. I recommend you use the sampling method.
+
+```{r week_02}
+W <- 4
+L <- 11
+precision <- 100
+posterior = compute_posterior(W, L, precision)
+p <- seq(0, 1, length.out = precision)
+
+next_sample_size = 6
+nsims = 1e4
+
+# Estimate probability
+sampled_p = sample(p, size=nsims, replace=T, prob = posterior)
+
+pred_tosses = sapply(
+  sampled_p,
+  function(q){                   
+    sum(
+      sample(
+        c("W", "L"), 
+        size = next_sample_size,
+        replace = T, prob = c(q, 1-q)
+      )=="W"
+    )
+  }
+)
+
+sample_counts <- table(pred_tosses)
+
+ggplot() +
+  geom_point(aes(x=0:next_sample_size, y=as.vector(sample_counts))) +
+  geom_segment(aes(x=0:next_sample_size, xend=0:next_sample_size,
+                   y=0, yend=sample_counts),
+               size=1.5
+  ) +
+  labs(x = "Number of \"W\"",
+       y = "Sample counts",
+       title = glue("Posterior predictive distribution for the next 5 tosses (W = {W} and L = {L})"))
+```
 
 ## Problem 03
 
