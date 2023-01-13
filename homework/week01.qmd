@@ -5,9 +5,10 @@ editor: visual
 ---
 
 ```{r}
-library(magrittr)
+library(dplyr)
 library(glue)
 library(ggplot2)
+options(scipen = 999)
 ```
 
 
@@ -25,12 +26,13 @@ are in the solutions guide.
 ```{r}
 compute_posterior <- function(W, L, precision_step=100){
   N <- W + L
-  p <- seq(0, 1, length.out = 100)
+  p <- seq(0, 1, by = 1/precision_step)
   
   # P(p|W,L) = P(W,L|p)P(p) / P(W,L)
   likelihood <- sapply(p, function(x) dbinom(W, N, x))
-  posterior = likelihood * p / sum(likelihood * p)
-  return(posterior)
+  posterior = likelihood / sum(likelihood)
+  
+  return(tibble(p, likelihood, posterior))
 }
 ```
 
@@ -39,10 +41,9 @@ compute_posterior <- function(W, L, precision_step=100){
 W <- 6
 L <- 3
 precision <- 100
-posterior = compute_posterior(W, L, precision)
-p <- seq(0, 1, length.out = precision)
+df_posterior = compute_posterior(W, L, precision)
 
-ggplot() +
+ggplot(data=df_posterior) +
   geom_line(aes(x=p, y=posterior)) +
   geom_point(aes(x=p, y=posterior)) +
   labs(x = "Proportion of water",
@@ -54,12 +55,26 @@ ggplot() +
 ```{r 01_solution}
 W <- 4
 L <- 11
-precision <- 100
-posterior = compute_posterior(W, L, precision)
-p <- seq(0, 1, length.out = precision)
+precision <- 10
+df_posterior = compute_posterior(W, L, precision)
 
+df_posterior %>% 
+  mutate_all(.f=round, digits=3)
+```
+
+```{r 01_solution}
+W <- 4
+L <- 11
+precision <- 10
+df_posterior = compute_posterior(W, L, precision)
+
+df_posterior %>% 
+  mutate_all(.f=round, digits=3)
+```
+
+```{r}
 # Plot function approximation
-ggplot() +
+ggplot(data=df_posterior) +
   geom_line(aes(x=p, y=posterior)) +
   geom_point(aes(x=p, y=posterior)) +
   labs(x = "Proportion of water",
@@ -68,21 +83,23 @@ ggplot() +
 
 ```
 
+
 ## Problem 02
 
 2. Using the posterior distribution from 1, compute the posterior predictive distribution for the next 5 tosses of the same globe. I recommend you use the sampling method.
 
-```{r week_02}
+```{r 02_solution}
 W <- 4
 L <- 11
 precision <- 100
-posterior = compute_posterior(W, L, precision)
-p <- seq(0, 1, length.out = precision)
+df_posterior = compute_posterior(W, L, precision)
 
-next_sample_size = 6
+next_sample_size = 5
 nsims = 1e4
 
 # Estimate probability
+p <- df_posterior$p
+posterior <- df_posterior$posterior
 sampled_p = sample(p, size=nsims, replace=T, prob = posterior)
 
 pred_tosses = sapply(
@@ -92,18 +109,20 @@ pred_tosses = sapply(
       sample(
         c("W", "L"), 
         size = next_sample_size,
-        replace = T, prob = c(q, 1-q)
+        replace = T, 
+        prob = c(q, 1-q)
       )=="W"
     )
   }
 )
 
-sample_counts <- table(pred_tosses)
+sample_counts <- table(pred_tosses) %>% as_tibble()
+sample_counts
 
-ggplot() +
-  geom_point(aes(x=0:next_sample_size, y=as.vector(sample_counts))) +
-  geom_segment(aes(x=0:next_sample_size, xend=0:next_sample_size,
-                   y=0, yend=sample_counts),
+ggplot(data = sample_counts) +
+  geom_point(aes(x=pred_tosses, y=n)) +
+  geom_segment(aes(x=pred_tosses, xend=pred_tosses,
+                   y=0, yend=n),
                size=1.5
   ) +
   labs(x = "Number of \"W\"",
@@ -114,6 +133,15 @@ ggplot() +
 ## Problem 03
 
 3. Use the posterior predictive distribution from 2 to calculate the probability of 3 or more water samples in the next 5 tosses.
+
+```{r}
+#P(W>=3)
+sample_counts %>% 
+  mutate(prob= n / sum(n)) %>% 
+  filter( as.numeric(pred_tosses) >= 3) %>% 
+  summarise(prob_gte_3= sum(prob))
+```
+
 
 ## Problem 04
 4-OPTIONAL. This problem is an optional challenge for people who are taking the course for a second or third time. Suppose you observe W = 5 water points, but you forgot to write down how many times the globe was tossed, so you don’t know the number of land points L. Assume that p = 0.7 and compute the posterior distribution of the number of tosses N. Hint: Use the binomial distribution.
