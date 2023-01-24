@@ -1,0 +1,179 @@
+---
+title: "Chapter 04 - 3. Gaussian model of height"
+format: html
+editor: visual
+---
+
+## Gaussian model of height
+
+## The data
+
+```{r}
+#| message: false
+library(rethinking)
+data(Howell1)
+d <- Howell1
+d2 <- d[ d$age >= 18 , ]
+```
+
+```{r}
+str( d )
+```
+
+```{r}
+precis( d )
+```
+
+## The model
+
+$$
+\begin{align}
+&h_i \sim \text{Normal}(\mu, \sigma) \qquad &\text{[likelihood]} \\
+&\mu \sim \text{Normal}(178, 20)  \qquad &\text{[ $\mu$ prior]} \\
+&\sigma \sim \text{Uniform}(0, 50)  \qquad &\text{[$\sigma$ prior]} 
+\end{align}
+$$
+
+### Prior distributions
+
+```{r}
+curve( dnorm( x , 178 , 20 ) , from=100 , to=250 )
+```
+
+```{r}
+curve( dunif( x , 0 , 50 ) , from=-10 , to=60 )
+```
+
+### Prior Predictive simulation
+
+```{r}
+sample_mu <- rnorm( 1e4 , 178 , 20 )
+sample_sigma <- runif( 1e4 , 0 , 50 )
+prior_h <- rnorm( 1e4 , sample_mu , sample_sigma )
+
+dens( prior_h )
+```
+
+## **Grid approximation of the posterior distribution**
+
+```{r}
+mu.list <- seq( from=150, to=160 , length.out=100 )
+sigma.list <- seq( from=7 , to=9 , length.out=100 )
+post <- expand.grid( mu=mu.list , sigma=sigma.list )
+post$LL <- sapply(
+  1:nrow(post),
+  function(i) sum(
+    dnorm(d2$height, post$mu[i], post$sigma[i], log=TRUE)
+    )
+  )
+post$prod <- post$LL + dnorm( post$mu , 178 , 20 , TRUE ) + dunif( post$sigma , 0 , 50 , TRUE )
+
+post$prob <- exp( post$prod - max(post$prod) ) # This is not scaled (They are probability weights)
+```
+
+```{r}
+contour_xyz( post$mu , post$sigma , post$prob )
+```
+
+```{r}
+image_xyz( post$mu , post$sigma , post$prob )
+```
+
+### Sampling from the posterior
+
+```{r}
+sample.rows <- sample(
+  1:nrow(post), size=1e4, replace=TRUE, prob=post$prob
+  )
+sample.mu <- post$mu[ sample.rows ]
+sample.sigma <- post$sigma[ sample.rows ]
+```
+
+```{r}
+plot(sample.mu , sample.sigma , cex=0.5 , pch=16 , col=col.alpha(rangi2,0.1) )
+```
+
+```{r}
+dens( sample.mu )
+```
+
+```{r}
+
+dens( sample.sigma )
+```
+
+```{r}
+PI( sample.mu )
+PI( sample.sigma )
+```
+
+### **Overthinking: Sample size and the normality of *σ*'s posterior**.
+
+```{r}
+d3 <- sample( d2$height , size=20 )
+
+mu.list <- seq( from=150, to=170 , length.out=200 )
+sigma.list <- seq( from=4 , to=20 , length.out=200 )
+post2 <- expand.grid( mu=mu.list , sigma=sigma.list )
+post2$LL <- sapply( 1:nrow(post2) , function(i) sum( dnorm( d3 , mean=post2$mu[i] , sd=post2$sigma[i] ,log=TRUE ) ) )
+post2$prod <- post2$LL + dnorm( post2$mu , 178 , 20 , TRUE ) +
+dunif( post2$sigma , 0 , 50 , TRUE )
+post2$prob <- exp( post2$prod - max(post2$prod) )
+sample2.rows <- sample( 1:nrow(post2) , size=1e4 , replace=TRUE, prob=post2$prob )
+sample2.mu <- post2$mu[ sample2.rows ]
+sample2.sigma <- post2$sigma[ sample2.rows ]
+plot( sample2.mu , sample2.sigma , cex=0.5 , col=col.alpha(rangi2,0.1) , xlab="mu" , ylab="sigma" , pch=16 )
+```
+
+```{r}
+dens( sample2.sigma , norm.comp=TRUE )
+```
+
+## **Finding the posterior distribution with `quap`**
+
+> Now we leave grid approximation behind and move on to one of the great engines of applied statistics, the **QUADRATIC APPROXIMATION**. Our interest in quadratic approximation, recall, is as a handy way to quickly make inferences about the shape of the posterior. The posterior's peak will lie at the **MAXIMUM A POSTERIORI** estimate (MAP), and we can get a useful image of the posterior's shape by using the quadratic approximation of the posterior distribution at this peak.
+
+```{r}
+library(rethinking)
+data(Howell1)
+d <- Howell1
+d2 <- d[ d$age >= 18 , ]
+```
+
+```{r}
+flist <- alist(
+  height ~ dnorm( mu , sigma ),
+  mu ~ dnorm( 178 , 20 ),
+  sigma ~ dunif( 0 , 50 )
+)
+```
+
+```{r fit_model}
+m4.1 <- quap( flist , data=d2 )
+```
+
+```{r}
+precis( m4.1 )
+```
+
+### **Overthinking: Start values for `quap`**. `quap`
+
+```{r}
+start <- list(
+  mu=mean(d2$height),
+  sigma=sd(d2$height)
+)
+m4.1a <- quap( flist , data=d2 , start=start )
+precis( m4.1a )
+```
+
+### **Sampling from a `quap`.**
+
+```{r}
+post <- extract.samples( m4.1 , n=1e4 )
+head(post)
+```
+
+```{r}
+precis(post)
+```

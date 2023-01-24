@@ -1,7 +1,6 @@
 ---
 title: "Homework - Week 01"
 format: html
-editor: visual
 ---
 
 ```{r}
@@ -20,7 +19,7 @@ For your own good, it would be helpful to review the EASY problems at the end of
 
 ## Problem 01
 
-1.  Suppose the globe tossing data (Lecture 2, Chapter 2) had turned out to be 4 water and 11 land. Construct the posterior distribution.
+1. Suppose the globe tossing data (Lecture 2, Chapter 2) had turned out to be 4 water and 11 land. Construct the posterior distribution.
 
 ```{r}
 compute_posterior <- function(W, L, buckets=100){
