@@ -1,0 +1,166 @@
+---
+title: "Homework - Week 01"
+format: html
+editor: visual
+---
+
+```{r}
+#| message: false
+library(dplyr)
+library(glue)
+library(ggplot2)
+options(scipen = 999)
+```
+
+# WEEK 1 PROBLEMS
+
+## Problem 00
+
+For your own good, it would be helpful to review the EASY problems at the end of Chapters 1, 2 and 3 (2nd edition). The answers are in the solutions guide.
+
+## Problem 01
+
+1.  Suppose the globe tossing data (Lecture 2, Chapter 2) had turned out to be 4 water and 11 land. Construct the posterior distribution.
+
+```{r}
+compute_posterior <- function(W, L, buckets=100){
+  N <- W + L
+  step = 1/buckets
+  p <- seq(0, 1, by = step)
+  
+  # P(p|W,L) = P(W,L|p)P(p) / P(W,L)
+  likelihood <- sapply(p, function(x) dbinom(W, N, x) * step)
+  posterior = likelihood / sum(likelihood)
+  
+  return(tibble(p, likelihood, posterior))
+}
+```
+
+```{r 01_book_example}
+W <- 6
+L <- 3
+precision <- 100
+df_posterior = compute_posterior(W, L, precision)
+
+ggplot(data=df_posterior) +
+  geom_line(aes(x=p, y=posterior)) +
+  geom_point(aes(x=p, y=posterior)) +
+  labs(x = "Proportion of water",
+       y = "Posterior probability",
+       title = glue("Posterior probability for W = {W} and L = {L}"))
+
+```
+
+```{r 01_solution}
+W <- 4
+L <- 11
+precision <- 100
+df_posterior = compute_posterior(W, L, precision)
+
+df_posterior %>% 
+  mutate_all(.f=round, digits=3)
+```
+
+```{r}
+# Plot function approximation
+ggplot(data=df_posterior) +
+  geom_line(aes(x=p, y=posterior)) +
+  geom_point(aes(x=p, y=posterior)) +
+  labs(x = "Proportion of water",
+       y = "Posterior probability",
+       title = glue("Posterior probability for W = {W} and L = {L}"))
+
+```
+
+## Problem 02
+
+2.  Using the posterior distribution from 1, compute the posterior predictive distribution for the next 5 tosses of the same globe. I recommend you use the sampling method.
+
+```{r 02_solution}
+W <- 4
+L <- 11
+precision <- 100
+df_posterior = compute_posterior(W, L, precision)
+
+next_sample_size = 5
+nsims = 1e4
+
+# Estimate probability
+p <- df_posterior$p
+posterior <- df_posterior$posterior
+sampled_p = sample(p, size=nsims, replace=T, prob = posterior)
+
+pred_tosses = sapply(
+  sampled_p,
+  function(q){    
+    sample(
+        c("W", "L"), 
+        size = next_sample_size,
+        replace = T, 
+        prob = c(q, 1-q)
+      ) %>% 
+      {. == "W"} %>%
+      sum()
+  }
+)
+
+sample_counts <- table(pred_tosses) %>% as_tibble()
+
+ggplot(data = sample_counts) +
+  geom_point(aes(x=pred_tosses, y=n)) +
+  geom_segment(aes(x=pred_tosses, xend=pred_tosses,
+                   y=0, yend=n),
+               linewidth=1.5
+  ) +
+  labs(x = "Number of \"W\"",
+       y = "Sample counts",
+       title = glue("Posterior predictive distribution for the next 5 tosses (W = {W} and L = {L})"))
+```
+
+## Problem 03
+
+3.  Use the posterior predictive distribution from 2 to calculate the probability of 3 or more water samples in the next 5 tosses.
+
+```{r}
+#P(W>=3)
+sample_counts %>% 
+  mutate(prob= n / sum(n)) %>% 
+  filter( as.numeric(pred_tosses) >= 3) %>% 
+  summarise(prob_gte_3= sum(prob))
+```
+
+## Problem 04
+
+4-OPTIONAL. This problem is an optional challenge for people who are taking the course for a second or third time. Suppose you observe W = 5 water points, but you forgot to write down how many times the globe was tossed, so you don't know the number of land points L. Assume that p = 0.7 and compute the posterior distribution of the number of tosses N. Hint: Use the binomial distribution.
+
+```{r}
+compute_posterior_N <- function(W, p, N_candidates){
+  likelihood <- sapply(N_candidates,function(n) dbinom(W, n, p))
+  posterior <- likelihood/sum(likelihood)
+  
+  return(tibble(N = N_candidates, likelihood, posterior))
+}
+
+```
+
+```{r 04_solution}
+W <- 5
+p <- 0.7
+N_candidates <- W:(W+15)
+df_N_posterior <- compute_posterior_N(W, p, N_candidates)
+
+df_N_posterior %>% 
+  mutate_all(.f=round, digits=3)
+```
+
+```{r}
+W <- 5
+p <- 0.7
+N_candidates <- W:(W+15)
+df_N_posterior <- compute_posterior_N(W, p, N_candidates)
+
+ggplot(data=df_N_posterior) +
+  geom_line(aes(x=N_candidates, y=posterior)) +
+  geom_point(aes(x=N_candidates, y=posterior)) +
+  scale_x_continuous(breaks=N_candidates)
+```
