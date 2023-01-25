@@ -182,7 +182,7 @@ ggplot(data=df_children) +
               alpha=0.5,
               color='grey'
   ) +
-  labs(title = "Parameters posterior sampled values as ablines")
+  labs(title = "Parameters prior sampled values as ablines")
 ```
 ### $\mu$ Mean samples
 
@@ -213,7 +213,7 @@ ggplot(data=df_means) +
 
 ```
 
-## Predictive posterior distribution
+### Predictive posterior distribution
 
 ```{r}
 age_range <- 0:12
@@ -310,13 +310,43 @@ df_contrast %>% pull(contrast) %>% {. > 0} %>% mean
 
 ```{r}
 ggplot(df_contrast) + 
-  geom_density(aes(x=contrast))
+  geom_density(aes(x=contrast, group=age))
+```
+
+```{r}
+
+percentiles <- c(0.5, 0.67, 0.89, 0.99)
+df_contrast_intervals <- df_contrast %>% 
+  split(.$age) %>% 
+  map_df(.x=., 
+         .f=function(x){
+           map(percentiles, function(p){
+             PI(x$contrast, p) %>% 
+               as.data.frame() %>% t %>% 
+               as_tibble() %>%
+               rename_with(.fn = function(z) c("lower", "upper")) %>% 
+               mutate(age = x$age[1],
+                      p = p) %>% 
+               select(age, p, everything())
+           }
+           )
+         }
+  )
+```
+
+```{r}
+ggplot(df_contrast_intervals %>% mutate(age=as.numeric(age))) +
+  geom_ribbon(aes(x=age, y=0,  ymin=lower, ymax=upper, group=p), 
+              alpha = 0.2) +
+  geom_hline(yintercept=0, linetype=2) +
+  labs(title="Distribution of contrast by age")
+  
 ```
 
 ## Problem 04
 
 The data in data(Oxboys) (rethinking
-package) are growth records for 26 boys measured over 9 periods. I want
+                          package) are growth records for 26 boys measured over 9 periods. I want
 you to model their growth. Specifically, model the increments in growth
 from one period (Occasion in the data table) to the next. Each increment is
 simply the difference between height in one occasion and height in the previous
@@ -376,6 +406,8 @@ A_j \sim \text{Normal}(\mu^A_j, \sigma^A) \\
 \end{align}
 $$
 
+### Model aggregated
+
 ```{r}
 df_model <- df_tidy %>% 
   transmute(dH = delta_h, S = subject, A = age, O = occasion - 1)
@@ -383,14 +415,10 @@ df_model <- df_tidy %>%
 m_boys <- quap(
   alist(
     dH ~ dlnorm(mu_ij, sigma),
-    mu_ij <- alpha[S] + beta[S] * A,
-    A ~ dnorm(muA_j, sigmaA),
-    muA_j <- alphaO[O],
-    alphaO[O] ~ dnorm(0,1),
-    alpha[S] ~ dnorm(0,1),
-    beta[S] ~ dnorm(0,1),
-    sigmaA ~ dunif(0,10),
-    sigma ~ dnorm(0,1)
+    mu_ij <- alpha + beta * A,
+    alpha ~ dnorm(0,0.1),
+    beta ~ dnorm(0,1),
+    sigma ~ dunif(0,3)
   ),
   data = df_model
 )
@@ -399,7 +427,8 @@ precis(m_boys, depth=2)
 
 ```{r}
 data_range <- df_model %>% select(O, A, S)
-posterior_mus <- link(m_boys)
+posterior_mus <- list(mu = link(m_boys))
+
 str(posterior_mus)
 ```
 ```{r}
@@ -427,7 +456,7 @@ df_means <-  bind_cols(data_range, mu_means, pi_intervals)
 
 ```{r}
 ggplot(data=df_means) +
-  geom_line(aes(x=A, y=exp(mu_ij), group=S)) +
+  geom_line(aes(x=A, y=exp(mu), group=S)) +
   geom_point(data=df_model, aes(x=A, y=dH, group=S), color="grey")
 ```
 
@@ -455,7 +484,7 @@ df_growth_posterior <- df_posterior %>%
   summarise(value =sum(value), .groups = "drop") %>% 
   arrange(S, id) %>% 
   print()
-  
+
 ```
 ```{r}
 real_growth <- df_model %>% 
@@ -468,3 +497,6 @@ ggplot(data=df_growth_posterior) +
   geom_density(aes(x=value))
 ```
 
+```{r}
+dens(df_growth_posterior$value)
+```
