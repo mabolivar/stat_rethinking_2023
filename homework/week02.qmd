@@ -25,7 +25,7 @@ summary(df)
 From the Howell1 dataset, consider only the people younger than 13 years
 old. Estimate the causal association between age and weight. Assume that
 age influences weight through two paths. First, age influences height, and
-height influences weight. Second, age directly influences weight through agerelated
+height influences weight. Second, age directly influences weight through age related
 changes in muscle growth and body proportions.
 Draw the DAG that represents these causal relationships. And then write
 a generative simulation that takes age as an input and simulates height and
@@ -43,9 +43,9 @@ Version 01
 
 $$
 \begin{align}
-& W_i - \text{Normal}(\mu_i, \sigma) \\
+& W_i \sim \text{Normal}(\mu_i, \sigma) \\
 & \mu_i = f_w(A_i, H_i) \\
-& H_i - \text{Normal}(\lambda_i, \rho) \\
+& H_i \sim \text{Normal}(\lambda_i, \rho) \\
 & \lambda_i = f_h(A_i) \\
 
 \end{align}
@@ -94,6 +94,7 @@ weight_simulator <- function(A){
 ```
 
 ```{r}
+# Prior simulation
 sim_ages <- sample(0:12, size = 1e3, replace = T)
 df_simulation <- weight_simulator(sim_ages)
 
@@ -309,11 +310,6 @@ df_contrast %>% pull(contrast) %>% {. > 0} %>% mean
 
 
 ```{r}
-ggplot(df_contrast) + 
-  geom_density(aes(x=contrast, group=age))
-```
-
-```{r}
 
 percentiles <- c(0.5, 0.67, 0.89, 0.99)
 df_contrast_intervals <- df_contrast %>% 
@@ -345,9 +341,7 @@ ggplot(df_contrast_intervals %>% mutate(age=as.numeric(age))) +
 
 ## Problem 04
 
-The data in data(Oxboys) (rethinking
-                          package) are growth records for 26 boys measured over 9 periods. I want
-you to model their growth. Specifically, model the increments in growth
+The data in data(Oxboys) (rethinking package) are growth records for 26 boys measured over 9 periods. I want you to model their growth. Specifically, model the increments in growth
 from one period (Occasion in the data table) to the next. Each increment is
 simply the difference between height in one occasion and height in the previous
 occasion. Since none of these boys shrunk during the study, all of the
@@ -383,28 +377,6 @@ df_tidy %>%
   spread(key=occasion, value = delta_h)
 ```
 
-
-i = individual
-j = occasion
-$$
-\begin{align}
-\Delta^h_j \sim \text{Log-Normal}(\mu_{ij}, \sigma) \\
-\mu_{ij} = f^i_\Delta(A_j) \\
-A_{j} \sim \text{Normal}(\mu_j^A, \sigma^A) \\
-\mu^A_{j} = f^i_\Delta(O)
-\end{align}
-$$
-$$
-\begin{align}
-\Delta^h_{ij} \sim \text{Log-Normal}(\mu_{ij}, \sigma) \\
-\mu_{ij} = \alpha_i + \beta_i A_{j} \\
-A_j \sim \text{Normal}(\mu^A_j, \sigma^A) \\
-\mu^A_{j} = \alpha^A_{O_j} \\
-\alpha^A_{O_j} \sim \text{Normal}(0, 1) \\
-\alpha_i \sim \text{Normal(0, 1)} \\
-\beta_i \sim \text{Normal(0, 1)}
-\end{align}
-$$
 
 ### Model aggregated
 
@@ -500,3 +472,29 @@ ggplot(data=df_growth_posterior) +
 ```{r}
 dens(df_growth_posterior$value)
 ```
+
+
+### Adidtional attempts
+
+i = individual
+j = occasion
+$$
+\begin{align}
+\Delta^h_j \sim \text{Log-Normal}(\mu_{ij}, \sigma) \\
+\mu_{ij} = f^i_\Delta(A_j) \\
+A_{j} \sim \text{Normal}(\mu_j^A, \sigma^A) \\
+\mu^A_{j} = f^i_\Delta(O)
+\end{align}
+$$
+
+$$
+\begin{align}
+\Delta^h_{ij} \sim \text{Log-Normal}(\mu_{ij}, \sigma) \\
+\mu_{ij} = \alpha_i + \beta_i A_{j} \\
+A_j \sim \text{Normal}(\mu^A_j, \sigma^A) \\
+\mu^A_{j} = \alpha^A_{O_j} \\
+\alpha^A_{O_j} \sim \text{Normal}(0, 1) \\
+\alpha_i \sim \text{Normal(0, 1)} \\
+\beta_i \sim \text{Normal(0, 1)}
+\end{align}
+$$
