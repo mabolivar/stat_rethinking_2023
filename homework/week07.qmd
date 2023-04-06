@@ -1,0 +1,664 @@
+---
+title: "Homework - Week 07"
+format:
+  html:
+    embed-resources: true
+---
+
+```{r}
+#| warning: false
+#| message: false
+library(rethinking)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(dagitty)
+library(patchwork)
+```
+
+
+## Problem 01
+
+The data in `data(bangladesh)` are 1934 women from the 1989 Bangladesh Fertility Survey. For each woman, we know which `district` she lived in (`D`), her number
+of living.children (`K`), her age.centered (`A`), whether she lived in an urban center (`U`),
+and finally whether or not she used contraception (use.contraception) (`C`).
+In the lecture, we estimated the total effect of urban residence on contraceptive
+use. Using the DAG from lecture, or your own version if you prefer, **now estimate only the direct effect of urban residence on contraceptive use**.
+
+```{r}
+data(bangladesh)
+d <- bangladesh %>% 
+  as_tibble %>% 
+  transmute(
+    C = use.contraception,
+    D = as.integer(district),
+    U = as.integer(urban),
+    A = age.centered,
+    K = as.numeric(living.children) # The min number of living children in the data set is 1
+  )
+d
+```
+
+
+```{r}
+exdag <- dagitty( "dag {
+    A -> C
+    K -> C
+    U -> C
+    D -> C
+    A -> K
+    U -> K
+    D -> U
+}")
+coordinates( exdag ) <- list( 
+  x=c(C=0,A=-1,D=1,K=-0.5,U=0.5) , 
+  y=c(C=0,A=0.2,D=0.2,K=0.5,U=0.5) )
+drawdag(exdag)
+```
+
+Total effect adjust set
+```{r}
+dagitty::adjustmentSets(exdag, exposure = "U", outcome = "C", effect = "total")
+```
+Statistica model
+
+$$
+\begin{align}
+C_i &\sim \text{Bernoulli}(p_i) \\
+\text{logit}(p_i) &= \alpha_{D[i]} + \beta_{D[i]}U_i \\
+\alpha &= \bar{\alpha} + v_{\_,1} \\
+\beta &= \bar{\beta} + v_{\_,2} \\
+v &= (\text{diag}(\sigma)\mathbf{L}\mathbf{Z})^T \\
+\mathbf{Z}_{j,k} &\sim \text{Normal}(0,1) \\
+\mathbf{\sigma} &\sim \text{Exponential}(1) \\
+\mathbf{L} &\sim \text{LKJCorrCholesky}(4) \\
+\end{align}
+$$
+
+```{r}
+#| output: false
+#| message: false
+#| cache: true
+m1_total <- ulam(
+  alist(
+    C ~ bernoulli(p),
+    logit(p) <- a[D] + b[D]*U,
+    # define effects using other parameters
+    # this is the non-centered Cholesky machine
+    transpars> vector[61]:a <<- abar[1] + v[,1],
+    transpars> vector[61]:b <<- abar[2] + v[,2],
+    transpars> matrix[61,2]:v <- compose_noncentered( sigma , L_Rho , Z ),
+    # priors - note that none have parameters inside them
+    # that is what makes them non-centered
+    matrix[2,61]:Z ~ normal( 0 , 1 ),
+    vector[2]:abar ~ normal(0,1),
+    cholesky_factor_corr[2]:L_Rho ~ lkj_corr_cholesky( 4 ),
+    vector[2]:sigma ~ exponential(1),
+    # convert Cholesky to Corr matrix
+    gq> matrix[2,2]:Rho <<- Chol_to_Corr(L_Rho)
+  ) , data=d , chains=4 , cores=4 )
+```
+
+Check the value for U
+```{r}
+precis(m1_total, depth = 2, pars = "abar")
+```
+
+```{r}
+total_precis <- precis(m1_total, depth = 2)
+as_tibble(total_precis) %>% 
+  mutate(param = row.names(total_precis)) %>% 
+  select(param, n_eff, Rhat4) %>% 
+  arrange(n_eff)
+```
+
+### What is the total effect of urban residence on contraceptive use?
+
+```{r}
+total_posterior <- extract.samples(m1_total)
+p_total_samples <- inv_logit(total_posterior$a + total_posterior$b) * 100
+
+mean_p <- p_total_samples %>% apply(MARGIN=2, FUN=mean)
+p89interval <- p_total_samples %>% apply(MARGIN=2, FUN=PI) %>% t
+total_to_plot <- tibble(
+  p = mean_p,
+  p5 = p89interval[,1],
+  p94 = p89interval[,2]
+) %>% 
+  mutate(D = row_number())
+
+total_effect_plot <- ggplot(total_to_plot) +
+  geom_segment(
+    aes(x=D, xend=D, y=p5, yend=p94), 
+    alpha = 0.4, linewidth=2, lineend = "round"
+  ) +
+  geom_point(aes(x=D, y=p)) +
+  geom_hline(aes(yintercept=mean(p_total_samples)), linetype=2) +
+  scale_y_continuous(limits = c(0, 100))+
+  labs(x="District", y="Percentual points (pp)", 
+       title = "Total effect of Urban residence on contraceptive us per district") +
+  theme_minimal()
+total_effect_plot
+```
+
+```{r}
+total_posterior <- extract.samples(m1_total)
+p_samples_urban <- inv_logit(total_posterior$a + total_posterior$b) * 100
+
+mean_p <- p_samples_urban %>% apply(MARGIN=2, FUN=mean)
+p89interval <- p_samples_urban %>% apply(MARGIN=2, FUN=PI) %>% t
+total_urban_to_plot <- tibble(
+  p = mean_p,
+  p5 = p89interval[,1],
+  p94 = p89interval[,2]
+) %>% 
+  mutate(D = row_number(),
+         U= "urban")
+
+
+p_samples_rural <- inv_logit(total_posterior$a) * 100
+
+mean_p <- p_samples_rural %>% apply(MARGIN=2, FUN=mean)
+p89interval <- p_samples_rural %>% apply(MARGIN=2, FUN=PI) %>% t
+total_rural_to_plot <- tibble(
+  p = mean_p,
+  p5 = p89interval[,1],
+  p94 = p89interval[,2]
+) %>% 
+  mutate(D = row_number(),
+         U = "rural")
+
+total_effect_by_category_plot <- ggplot(bind_rows(total_rural_to_plot, total_urban_to_plot)) +
+  geom_segment(
+    aes(x=D, xend=D, y=p5, yend=p94, color=U), 
+    alpha = 0.4, linewidth=2, lineend = "round"
+  ) +
+  geom_point(aes(x=D, y=p, color=U)) +
+  geom_hline(aes(yintercept=mean(c(p_samples_rural, p_samples_urban))), linetype=2) +
+  scale_y_continuous(limits = c(0, 100)) +
+  facet_grid( U ~ .) +
+  labs(x="District", y="Percentual points (pp)", 
+       title = "Total effect of Urban residence on contraceptive us per district") +
+  theme_minimal()
+total_effect_by_category_plot
+```
+
+
+### Direct effect model
+
+
+Direct effect adjustment set
+```{r}
+dagitty::adjustmentSets(exdag, exposure = "U", outcome = "C", effect = "direct")
+```
+
+Model
+$$
+\begin{align}
+C_i &\sim \text{Bernoulli}(p_i) \\
+\text{logit}(p_i) &= \alpha_{D[i]} + \beta^U_{D[i]}U_i + \beta^A_{D[i]}A_i + \beta^K\sum_{j=0}^{K_i-1}\delta_j \\
+\alpha &= \bar{\alpha} + v_{\_,1} \\
+\beta^U &= \bar{\beta}^U + v_{\_,2} \\
+\beta^A &= \bar{\beta}^A + v_{\_,3} \\
+\beta^K &= \bar{\beta}^K + v_{\_,4} \\
+v &= (\text{diag}(\mathbf{\sigma})\mathbf{L}\mathbf{Z})^T \\
+\mathbf{Z}_{j,k} &\sim \text{Normal}(0,1) \\
+\mathbf{\sigma} &\sim \text{Exponential}(1) \\
+\mathbf{L} &\sim \text{LKJCorrCholesky}(4) \\
+\mathbf{\delta} &\sim \text{Dirichlet}(a)
+\end{align}
+$$
+*Notes*
+- The effect of $A$ is expected to vary by district
+- $\beta^K$ the "maximum effect" of having children is expected to vary by district
+- $\delta$ is the proportion of the maximum effect and their values aren't assumed to be associated with the district.
+
+#### Model with age and kids
+
+```{r direct_complete_model}
+#| output: false
+#| message: false
+#| cache: true
+
+d_list <- list(
+  C = d$C,
+  D = d$D,
+  U = d$U,
+  A = d$A,
+  K = d$K
+)
+d_list$prior_dirichlet <- rep(2, 3)
+
+m1_direct_complete <- ulam(
+  alist(
+    C ~ bernoulli(p),
+    logit(p) <- a[D] + 
+      bU[D]*U + 
+      bA[D]*A + 
+      bK*sum(delta_j[1:K]),
+    # define effects using other parameters
+    # this is the non-centered Cholesky machine
+    transpars> vector[61]:a <<- abar[1] + v[,1],
+    transpars> vector[61]:bU <<- abar[2] + v[,2],
+    transpars> vector[61]:bA <<- abar[3] + v[,3],
+    transpars> matrix[61,3]:v <- compose_noncentered( sigma , L_Rho , Z ),
+    # priors - note that none have parameters inside them
+    # that is what makes them non-centered
+    matrix[3,61]:Z ~ normal( 0 , 1 ),
+    vector[3]:abar ~ normal(0,1),
+    cholesky_factor_corr[3]:L_Rho ~ lkj_corr_cholesky( 4 ),
+    vector[3]:sigma ~ exponential(1),
+    vector[4]: delta_j <<- append_row(0 , delta),
+    simplex[3]: delta ~ dirichlet(prior_dirichlet),
+    bK ~ normal(0, 1),
+    # convert Cholesky to Corr matrix
+    gq> matrix[3,3]:Rho <<- Chol_to_Corr(L_Rho)
+  ) , data=d_list , chains=4 , cores=4, log_lik = T)
+```
+
+```{r}
+precis(m1_direct_complete, depth = 2, pars = "abar")
+```
+
+```{r}
+direct_precis <- precis(m1_direct_complete, depth = 2)
+to_plot <- as_tibble(direct_precis) %>% 
+  mutate(param = row.names(direct_precis)) %>% 
+  select(param, n_eff, Rhat4) %>% 
+  arrange(n_eff)
+to_plot
+```
+
+```{r}
+ggplot(data=to_plot) +
+  geom_point(aes(x=n_eff, y=Rhat4)) +
+  geom_vline(aes(xintercept=250), color="red") +
+  geom_hline(aes(yintercept=1), color="black")
+```
+
+```{r}
+#| eval: false
+#| include: false
+traceplot(m1_direct_complete)
+trankplot(m1_direct_complete)
+```
+
+```{r}
+precis(m1_direct_complete, depth = 2, pars = c("bU", "bA", "bK","delta")) %>% head
+```
+
+### What is the direct effect of urban residence on contraceptive use?
+
+```{r}
+posterior <- extract.samples(m1_direct_complete)
+p_direct_samples <- inv_logit(posterior$a + posterior$bU) * 100
+
+mean_p <- p_direct_samples %>% apply(MARGIN=2, FUN=mean)
+p89interval <- p_direct_samples %>% apply(MARGIN=2, FUN=PI) %>% t
+direct_to_plot <- tibble(
+  p = mean_p,
+  p5 = p89interval[,1],
+  p94 = p89interval[,2]
+) %>% 
+  mutate(D = row_number())
+```
+
+```{r}
+direct_effect_plot <- ggplot(direct_to_plot) +
+  geom_segment(
+    aes(x=D, xend=D, y=p5, yend=p94), 
+    alpha = 0.4, linewidth=2, lineend = "round"
+  ) +
+  geom_point(aes(x=D, y=p)) +
+  geom_hline(aes(yintercept=mean(p_direct_samples)), linetype=2) +
+  scale_y_continuous(limits = c(0, 100))+
+  labs(x="District", y="Percentual points (pp)", 
+       title = "Direct effect of Urban residence 
+       on contraceptive us per district for Avg A and 1 child") +
+  theme_minimal()
+(total_effect_plot / direct_effect_plot)
+```
+
+```{r totalvsdirect}
+
+p_contrast <- p_direct_samples - p_total_samples
+
+mean_p <- p_contrast %>% apply(MARGIN=2, FUN=mean)
+p89interval <- p_contrast %>% apply(MARGIN=2, FUN=PI) %>% t
+contrast_to_plot <- tibble(
+  p = mean_p,
+  p5 = p89interval[,1],
+  p94 = p89interval[,2]
+) %>% 
+  mutate(D = row_number())
+
+
+ggplot(contrast_to_plot) +
+  geom_segment(
+    aes(x=D, xend=D, y=p5, yend=p94), 
+    alpha = 0.4, linewidth=2, lineend = "round"
+  ) +
+  geom_point(aes(x=D, y=p)) +
+  geom_hline(aes(yintercept=mean(p_contrast)), linetype=2) +
+  # scale_y_continuous(limits = c(0, 100))+
+  labs(x="District", y="Percentual points (pp)", 
+       title = "Contrast between the direct and total effect") +
+  theme_minimal()
+
+precis(contrast_to_plot)
+```
+
+
+## Problem 02
+
+Using the same DAG as before, now estimate the effect of number of surviving
+children on contraceptive use. Obviously contraceptive use can also influence the
+number of surviving children. But leave that issue aside for the moment (it will
+return in the optional challenge further down).
+
+
+```{r}
+exdag <- dagitty( "dag {
+    A -> C
+    K -> C
+    U -> C
+    D -> C
+    A -> K
+    U -> K
+    D -> U
+}")
+coordinates( exdag ) <- list( 
+  x=c(C=0,A=-1,D=1,K=-0.5,U=0.5) , 
+  y=c(C=0,A=0.2,D=0.2,K=0.5,U=0.5) )
+drawdag(exdag)
+```
+
+Total effect adjust set
+```{r}
+dagitty::adjustmentSets(exdag, exposure = "K", outcome = "C", effect = "total")
+```
+
+```{r}
+library(stringr)
+m2_posterior <- extract.samples(m1_direct_complete)
+one_kid_samples <- with(m2_posterior, inv_logit(a + bU)) * 100
+kids <- c(1:4)
+nkids <- length(kids)
+
+bk_to_plot <- map_df(
+  kids, 
+  .f=function(k){
+    mbK <- m2_posterior$bK %>% rep(61) %>% matrix(ncol=61)
+    bK_samples <- with(
+      m2_posterior,
+      if(k == 1){
+        inv_logit(a + bU) * 100
+      }else{
+        inv_logit(a + bU + mbK * apply(cbind(0,delta)[,1:k],1, sum)) * 100
+      }
+    )
+    # Build data frame
+    mean_p <- bK_samples %>% apply(MARGIN=2, FUN=mean)
+    p89interval <- bK_samples %>% apply(MARGIN=2, FUN=PI) %>% t
+    bk_tmp <- tibble(
+      p = mean_p,
+      p5 = p89interval[,1],
+      p94 = p89interval[,2]
+    ) %>% 
+      mutate(D = row_number(), 
+             xpos = str_pad((D-1) * nkids + k, 3, pad = 0, ), 
+             K = as.character(k))
+    return(bk_tmp)
+  }
+)
+
+
+# Plot
+bk_effect_plot <- ggplot(bk_to_plot) +
+  geom_segment(
+    aes(x=D, xend=D, y=p5, yend=p94, color=K), 
+    alpha = 0.4, linewidth=2, lineend = "round"
+  ) +
+  geom_point(aes(x=D, y=p, color=K)) +
+  geom_hline(aes(yintercept=mean(one_kid_samples)), linetype=2) +
+  scale_y_continuous(limits = c(0, 100)) +
+  facet_grid(K ~.) +
+  labs(x="District", y="Percentual points (pp)", 
+       title = "Direct effect of Surviving kids on contraceptive per district") +
+  theme_minimal()
+bk_effect_plot
+
+```
+
+```{r}
+#| fig-height: 15
+bk_effect_plot <- ggplot(bk_to_plot) +
+  geom_segment(
+    aes(x=xpos, xend=xpos, y=p5, yend=p94, color=K),
+    alpha = 0.4, linewidth=2, lineend = "round"
+  ) +
+  geom_point(aes(x=xpos, y=p, color=K)) +
+  geom_hline(aes(yintercept=mean(one_kid_samples)), linetype=2) +
+  scale_y_continuous(limits = c(0, 100)) +
+  facet_wrap(D ~., scales = "free_x") +
+  labs(x="District", y="Percentual points (pp)", 
+       title = "Direct effect of Surviving kids on contraceptive per district") +
+  theme_minimal() +
+  theme(panel.grid.major.x = element_blank(), 
+        axis.text.x = element_blank())
+bk_effect_plot
+```
+
+## Problem 03
+
+Now let the causal effect of children vary by district. Incorporate this new district feature into the same multivariate prior that contains the urban/rural features. How much do districts vary in how surviving children are associated with contraceptive use?
+
+
+Model
+$$
+\begin{align}
+C_i &\sim \text{Bernoulli}(p_i) \\
+\text{logit}(p_i) &= \alpha_{D[i]} + \beta^U_{D[i]}U_i + \beta^A_{D[i]}A_i + \beta^K_{D[i]}\sum_{j=0}^{K_i-1}\delta_j \\
+\alpha &= \bar{\alpha} + v_{\_,1} \\
+\beta^U &= \bar{\beta}^U + v_{\_,2} \\
+\beta^A &= \bar{\beta}^A + v_{\_,3} \\
+\beta^K &= \bar{\beta}^K + v_{\_,4} \\
+v &= (\text{diag}(\mathbf{\sigma})\mathbf{L}\mathbf{Z})^T \\
+\mathbf{Z}_{j,k} &\sim \text{Normal}(0,1) \\
+\mathbf{\sigma} &\sim \text{Exponential}(1) \\
+\mathbf{L} &\sim \text{LKJCorrCholesky}(4) \\
+\mathbf{\delta} &\sim \text{Dirichlet}(a)
+\end{align}
+$$
+
+```{r kids_district_model}
+#| output: false
+#| message: false
+#| cache: true
+
+d_list <- list(
+  C = d$C,
+  D = d$D,
+  U = d$U,
+  A = d$A,
+  K = d$K
+)
+d_list$prior_dirichlet <- rep(2, 3)
+
+m3_direct_complete <- ulam(
+  alist(
+    C ~ bernoulli(p),
+    logit(p) <- a[D] + 
+      bU[D]*U + 
+      bA[D]*A + 
+      bK[D]*sum(delta_j[1:K]),
+    # define effects using other parameters
+    # this is the non-centered Cholesky machine
+    transpars> vector[61]:a <<- abar[1] + v[,1],
+    transpars> vector[61]:bU <<- abar[2] + v[,2],
+    transpars> vector[61]:bA <<- abar[3] + v[,3],
+    transpars> vector[61]:bK <<- abar[4] + v[,4],
+    transpars> matrix[61,4]:v <- compose_noncentered( sigma , L_Rho , Z ),
+    # priors - note that none have parameters inside them
+    # that is what makes them non-centered
+    matrix[4,61]:Z ~ normal( 0 , 1 ),
+    vector[4]:abar ~ normal(0,1),
+    cholesky_factor_corr[4]:L_Rho ~ lkj_corr_cholesky( 4 ),
+    vector[4]:sigma ~ exponential(1),
+    vector[4]: delta_j <<- append_row(0 , delta),
+    simplex[3]: delta ~ dirichlet(prior_dirichlet),
+    # convert Cholesky to Corr matrix
+    gq> matrix[4,4]:Rho <<- Chol_to_Corr(L_Rho)
+  ) , data=d_list , chains=4 , cores=4, log_lik = T)
+```
+
+```{r}
+# Model without varying children effect by district
+precis(m1_direct_complete, depth = 2, pars = c("abar", "bK"))
+# Model with varying children effect by district
+precis(m3_direct_complete, depth = 2, pars = "abar")
+```
+
+
+```{r}
+library(stringr)
+m3_posterior <- extract.samples(m3_direct_complete)
+one_kid_samples <- with(m3_posterior, inv_logit(a + bU)) * 100
+kids <- c(1:4)
+nkids <- length(kids)
+bk_to_plot <- map_df(
+  kids, 
+  .f=function(k){
+    bK_samples <- with(
+      m3_posterior,
+      if(k == 1){
+        inv_logit(a + bU) * 100
+      }else{
+        inv_logit(a + bU + bK * apply(cbind(0,delta)[,1:k],1, sum)) * 100
+      }
+    )
+    # Build data frame
+    mean_p <- bK_samples %>% apply(MARGIN=2, FUN=mean)
+    p89interval <- bK_samples %>% apply(MARGIN=2, FUN=PI) %>% t
+    bk_tmp <- tibble(
+      p = mean_p,
+      p5 = p89interval[,1],
+      p94 = p89interval[,2]
+    ) %>% 
+      mutate(D = row_number(), 
+             xpos = str_pad((D-1) * nkids + k, 3, pad = 0, ), 
+             K = as.character(k))
+    return(bk_tmp)
+  }
+)
+
+
+# Plot
+bk_effect_plot <- ggplot(bk_to_plot) +
+  geom_segment(
+    aes(x=D, xend=D, y=p5, yend=p94, color=K), 
+    alpha = 0.4, linewidth=2, lineend = "round"
+  ) +
+  geom_point(aes(x=D, y=p, color=K)) +
+  geom_hline(aes(yintercept=mean(one_kid_samples)), linetype=2) +
+  scale_y_continuous(limits = c(0, 100)) +
+  facet_grid(K ~.) +
+  labs(x="District", y="Percentual points (pp)", 
+       title = "Direct effect of Surviving kids on contraceptive per district") +
+  theme_minimal()
+bk_effect_plot
+
+```
+
+```{r}
+#| fig-height: 15
+bk_effect_plot <- ggplot(bk_to_plot) +
+  geom_segment(
+    aes(x=xpos, xend=xpos, y=p5, yend=p94, color=K),
+    alpha = 0.4, linewidth=2, lineend = "round"
+  ) +
+  geom_point(aes(x=xpos, y=p, color=K)) +
+  geom_hline(aes(yintercept=mean(one_kid_samples)), linetype=2) +
+  scale_y_continuous(limits = c(0, 100)) +
+  facet_wrap(D ~., scales = "free_x") +
+  labs(x="District", y="Percentual points (pp)", 
+       title = "Direct effect of Surviving kids on contraceptive per district") +
+  theme_minimal() +
+  theme(panel.grid.major.x = element_blank(), 
+        axis.text.x = element_blank())
+bk_effect_plot
+```
+
+```{r}
+kids <- c(1:4)
+nkids <- length(kids)
+contrast_to_plot <- map_df(
+  kids, 
+  .f=function(k){
+    mbK <- m2_posterior$bK %>% rep(61) %>% matrix(ncol=61)
+    bK_samples <- with(
+      m2_posterior,
+      if(k == 1){
+        inv_logit(a + bU) * 100
+      }else{
+        inv_logit(a + bU + mbK * apply(cbind(0,delta)[,1:k],1, sum)) * 100
+      }
+    )
+    bK_cluster_samples <- with(
+      m3_posterior,
+      if(k == 1){
+        inv_logit(a + bU) * 100
+      }else{
+        inv_logit(a + bU + bK * apply(cbind(0,delta)[,1:k],1, sum)) * 100
+      }
+    )
+    # Build data frame
+    contrast <- bK_cluster_samples - bK_samples
+    mean_p <- contrast  %>% apply(MARGIN=2, FUN=mean)
+    p89interval <- contrast %>% apply(MARGIN=2, FUN=PI) %>% t
+    bk_tmp <- tibble(
+      p = mean_p,
+      p5 = p89interval[,1],
+      p94 = p89interval[,2]
+    ) %>% 
+      mutate(D = row_number(), 
+             xpos = str_pad((D-1) * nkids + k, 3, pad = 0, ), 
+             K = as.character(k))
+    return(bk_tmp)
+  }
+)
+
+
+# Plot
+bk_effect_plot <- ggplot(contrast_to_plot) +
+  geom_segment(
+    aes(x=D, xend=D, y=p5, yend=p94, color=K), 
+    alpha = 0.4, linewidth=2, lineend = "round"
+  ) +
+  geom_point(aes(x=D, y=p, color=K)) +
+  geom_hline(aes(yintercept = 0), linetype=2) +
+  facet_grid(K ~.) +
+  labs(x="District", y="Percentual points (pp)", 
+       title = "Constrast on the effect of living children when causal effect of children variesby district") +
+  theme_minimal()
+bk_effect_plot
+```
+
+```{r}
+#| fig-height: 15
+ggplot(contrast_to_plot) +
+  geom_segment(
+    aes(x=xpos, xend=xpos, y=p5, yend=p94, color=K),
+    alpha = 0.4, linewidth=2, lineend = "round"
+  ) +
+  geom_point(aes(x=xpos, y=p, color=K)) +
+  geom_hline(aes(yintercept=0), linetype=2) +
+  facet_wrap(D ~., scales = "free_x") +
+  labs(x="District", y="Percentual points (pp)", 
+       title = "Constrast on the effect of living children when causal effect of children varies by district") +
+  theme_minimal() +
+  theme(panel.grid.major.x = element_blank(), 
+        axis.text.x = element_blank())
+
+```
