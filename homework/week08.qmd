@@ -1,0 +1,419 @@
+---
+title: "Homework - Week 08"
+format:
+  html:
+    embed-resources: true
+---
+
+```{r}
+#| warning: false
+#| message: false
+library(rethinking)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(dagitty)
+library(patchwork)
+```
+
+
+The data in data(Monks) are “like” and “dislike” nominations by 18 monks living
+in the same monastery over three time periods. Therefore the observed variables are
+counts from 0 to 3 of times monk A nominated monk B as liked or disliked.1 Each
+row in the data is a pair of monks (a dyad). The variables are:
+• A: Index number for first monk in dyad
+• B: Index number for second monk in dyad
+• like_AB: Number of times A nominated B as liked
+• like_BA: Number of times B nominated A as liked
+• dislike_AB: Number of times A nominated B as disliked
+• dislike_BA: Number of times B nominated A as disliked
+
+## Problem 01
+
+1. Use these data to estimate the amount of reciprocity in “like” nominations within dyads. You can ignore the “dislike” data for now. Use the social network example
+from the book to help, but you should modify it appropriately.
+
+```{r load-data}
+data(Monks)
+d <- Monks %>% rename(D = dyad_id) %>% mutate(Y=3L) %>% as_tibble()
+head(d)
+```
+
+$$
+\begin{align}
+L_{AB} &\sim \text{Bernoulli}(3, p_{AB}) \\
+\log(p_{AB}) &= \alpha + T_{AB} \\
+
+L_{BA} &\sim \text{Bernoulli}(3, p_{BA}) \\
+\log(p_{BA}) &= \alpha + T_{BA} \\
+
+\begin{pmatrix} T_{AB} \\ T_{BA} \end{pmatrix} 
+&\sim 
+\text{MVNormal}(
+\begin{bmatrix} 0 \\ 0 \end{bmatrix}, 
+\begin{bmatrix} \sigma^2 & \rho\sigma^2 \\ \rho\sigma^2 & \sigma^2 \end{bmatrix}
+) \\
+\rho &\sim \text{LKJCorr}(2) \\
+\sigma &\sim \text{Exponential}(1) \\
+\alpha &\sim \text{Normal}(0,1)
+\end{align}
+$$
+
+```{r}
+#| output: false
+#| message: false
+#| cache: true
+N_dyads <- nrow(d)
+d_list <- d %>% as.list()
+d_list$N_dyads <- N_dyads
+
+m1 <- ulam(
+  alist(
+    like_AB ~ binomial(Y, pAB),
+    like_BA ~ binomial(Y, pBA),
+    logit(pAB) <- alpha + T[D,1],
+    logit(pBA) <- alpha + T[D,2],
+    alpha ~ normal(0, 1),
+    
+    ## Dyad effects
+    transpars> matrix[N_dyads, 2]:T <- 
+      compose_noncentered( rep_vector(sigma_T,2) , L_Rho_T , Z ),
+    matrix[2, N_dyads]:Z ~ normal(0,1),
+    cholesky_factor_corr[2]:L_Rho_T ~ lkj_corr_cholesky(2),
+    sigma_T ~ exponential(1),
+    
+    ## compute correlation matrix dyad
+    gq> matrix[2,2]:Rho_T <<- Chol_to_Corr(L_Rho_T)
+  ),
+  data = d_list, chains=4, cores=4, iter=2000
+)
+
+```
+
+```{r}
+precis(m1, depth=3, pars=c("alpha", "Rho_T", "sigma_T"))
+```
+
+The correlation is positive (0.63) and slightly high. Let's plot the mean samples for dyads
+```{r raw_like_plot}
+m1_post <- extract.samples(m1)
+
+raw_likeA_effect <- apply(m1_post$T[,,1], 2, mean)
+raw_likeB_effect <- apply(m1_post$T[,,2], 2, mean)
+
+raw_scale_plot <- ggplot()+
+  geom_point(
+    aes(x=raw_likeA_effect, y=raw_likeB_effect), alpha=0.2) +
+  geom_abline(intercept=0, slope=1, linetype=2) +
+  labs(title="[Like] - Raw effect plot")
+```
+
+```{r original_like_plot}
+
+m_a <- m1_post$a %>% rep(N_dyads) %>% matrix(ncol=N_dyads)
+org_likeA_effect <- apply(inv_logit(m_a + m1_post$T[,,1]), 2, mean)
+org_likeB_effect <- apply(inv_logit(m_a + m1_post$T[,,2]), 2, mean)
+
+original_scale_plot <- ggplot()+
+  geom_point(aes(x=org_likeA_effect, y=org_likeB_effect), alpha=0.2) +
+  geom_abline(intercept=0, slope=1, linetype=2) +
+  labs(title="[Like] - Original effect plot")
+
+raw_scale_plot | original_scale_plot
+```
+
+## Problem 02
+
+Now also analyze the “dislike” nominations. Estimate the amount of reciprocity in the “dislike” nominations and compare to the estimate from the “like” nominations. Does “like” or “dislike” have higher reciprocity? Be sure to compute the
+posterior contrast between the two estimates.
+
+
+```{r}
+#| output: false
+#| message: false
+#| cache: true
+N_dyads <- nrow(d)
+d_list <- d %>% as.list()
+d_list$N_dyads <- N_dyads
+
+m2 <- ulam(
+  alist(
+    dislike_AB ~ binomial(Y, pAB),
+    dislike_BA ~ binomial(Y, pBA),
+    logit(pAB) <- alpha + T[D,1],
+    logit(pBA) <- alpha + T[D,2],
+    alpha ~ normal(0, 1),
+    
+    ## Dyad effects
+    transpars> matrix[N_dyads, 2]:T <- 
+      compose_noncentered( rep_vector(sigma_T,2) , L_Rho_T , Z ),
+    matrix[2, N_dyads]:Z ~ normal(0,1),
+    cholesky_factor_corr[2]:L_Rho_T ~ lkj_corr_cholesky(2),
+    sigma_T ~ exponential(1),
+    
+    ## compute correlation matrix dyad
+    gq> matrix[2,2]:Rho_T <<- Chol_to_Corr(L_Rho_T)
+  ),
+  data = d_list, chains=4, cores=4, iter=2000
+)
+
+```
+
+```{r}
+precis(m2, depth=3, pars=c("alpha", "Rho_T", "sigma_T"))
+```
+
+The correlation is positive (0.45) but lower than the Like correlation (0.61). 
+```{r}
+m2_post <- extract.samples(m2)
+
+reciprocity_constrast <- m1_post$Rho_T[,1,2] - m2_post$Rho_T[,1,2]
+
+ggplot() +
+  geom_density(aes(x=reciprocity_constrast)) +
+  geom_vline(xintercept = 0, linetype = 2) +
+  labs(title = "Contrast between Like and Dislikes")
+```
+
+Let's plot the mean samples for dyads.
+```{r raw_like_plot_m2}
+raw_dislikeA_effect <- apply(m2_post$T[,,1], 2, mean)
+raw_dislikeB_effect <- apply(m2_post$T[,,2], 2, mean)
+
+raw_dislike_scale_plot <- ggplot()+
+  geom_point(
+    aes(x=raw_dislikeA_effect, y=raw_dislikeB_effect), alpha=0.2) +
+  geom_abline(intercept=0, slope=1, linetype=2) +
+  labs(title="[Dislike] - Raw effect plot")
+```
+
+```{r original_like_plot_m2}
+
+m_a <- m2_post$a %>% rep(N_dyads) %>% matrix(ncol=N_dyads)
+org_dislikeA_effect <- apply(inv_logit(m_a + m2_post$T[,,1]), 2, mean)
+org_dislikeB_effect <- apply(inv_logit(m_a + m2_post$T[,,2]), 2, mean)
+
+original_dislike_scale_plot <- ggplot()+
+  geom_point(aes(x=org_dislikeA_effect, y=org_dislikeB_effect), alpha=0.2) +
+  geom_abline(intercept=0, slope=1, linetype=2) +
+  labs(title="[Dislike] - Original effect plot")
+
+raw_dislike_scale_plot | original_dislike_scale_plot
+```
+
+## Problem 03
+
+Now consider generalized liking and disliking. Add generalized “receiving” parameters to the model, analogous to receiving varying effects from the sharing example in the book/lecture. (Each monk only named 3 likes and 3 dislikes each time,
+so the amount of “giving” is fixed by design in these data.) Can you identify any individuals who are particularly liked/disliked, independent of the dyadic relations?
+
+
+
+
+```{r}
+#| output: false
+#| message: false
+#| cache: true
+N_dyads <- nrow(d)
+d_list <- d %>% as.list()
+d_list$N_dyads <- N_dyads
+d_list$M <- c(d_list$A, d_list$B) %>% unique() # Monk
+
+m3 <- ulam(
+  alist(
+    like_AB ~ binomial(Y, pAB),
+    like_BA ~ binomial(Y, pBA),
+    logit(pAB) <- alpha + T[D,1] + R[B],
+    logit(pBA) <- alpha + T[D,2] + R[A],
+    alpha ~ normal(0, 1),
+    
+    ## Monks effect
+    R[M] ~ normal(alpha_M, sigma_M),
+    alpha_M ~ normal(0,1),
+    sigma_M~ exponential(1),
+    
+    ## Dyad effects
+    transpars> matrix[N_dyads, 2]:T <- 
+      compose_noncentered( rep_vector(sigma_T,2) , L_Rho_T , Z ),
+    matrix[2, N_dyads]:Z ~ normal(0,1),
+    cholesky_factor_corr[2]:L_Rho_T ~ lkj_corr_cholesky(2),
+    sigma_T ~ exponential(1),
+    
+    ## compute correlation matrix dyad
+    gq> matrix[2,2]:Rho_T <<- Chol_to_Corr(L_Rho_T)
+  ),
+  data = d_list, chains=4, cores=4, iter=2000
+)
+```
+
+
+```{r}
+m3_post <- extract.samples(m3)
+str(m3_post)
+```
+### Liked monks
+```{r}
+raw_like_monk_effect <- with(m3_post, R)
+
+mean_p <- raw_like_monk_effect %>% apply(MARGIN=2, FUN=mean)
+p89interval <- raw_like_monk_effect %>% 
+  apply(MARGIN=2, FUN=PI) %>%
+  t
+raw_like_to_plot <- tibble(
+  p = mean_p,
+  p5 = p89interval[,1],
+  p94 = p89interval[,2]
+) %>% 
+  mutate(M = row_number())
+
+raw_like_monk_plot <- ggplot(raw_like_to_plot) +
+  geom_point(aes(x = M, y = p)) +
+  geom_segment(
+    aes(x=M, xend=M, y=p5, yend=p94), 
+    alpha = 0.4, linewidth=2, lineend = "round"
+  ) +
+  geom_hline(aes(yintercept=0), linetype=2) +
+  labs(title="Raw", y="odds") +
+  theme_light()
+
+raw_like_monk_plot
+```
+
+
+
+```{r}
+#| output: false
+#| message: false
+#| cache: true
+N_dyads <- nrow(d)
+d_list <- d %>% as.list()
+d_list$N_dyads <- N_dyads
+d_list$M <- c(d_list$A, d_list$B) %>% unique() # Monk
+N_monks <- d_list$M %>% length()
+d_list$N_monks <- N_monks
+
+m4 <- ulam(
+  alist(
+    # Like
+    like_AB ~ binomial(Y, pAB),
+    like_BA ~ binomial(Y, pBA),
+    logit(pAB) <- alpha + T[D,1] + R[B,1],
+    logit(pBA) <- alpha + T[D,2] + R[A,1],
+    alpha ~ normal(0, 1),
+    
+    #Dislike
+    dislike_AB ~ binomial(Y, pABd),
+    dislike_BA ~ binomial(Y, pBAd),
+    logit(pABd) <- alpha_d + Td[D,1]+ R[B,2],
+    logit(pBAd) <- alpha_d + Td[D,2]+ R[A,2],
+    alpha_d ~ normal(0, 1),
+    
+    ## Monks effect
+    vector[2]:R[N_monks] ~ multi_normal(0, Rho_M, sigma_M),
+    Rho_M ~ lkj_corr(4),
+    sigma_M~ exponential(1),
+    
+    ## Dyad effects - Like
+    transpars> matrix[N_dyads, 2]:T <- 
+      compose_noncentered( rep_vector(sigma_T,2) , L_Rho_T , Z ),
+    matrix[2, N_dyads]:Z ~ normal(0,1),
+    cholesky_factor_corr[2]:L_Rho_T ~ lkj_corr_cholesky(2),
+    sigma_T ~ exponential(1),
+    
+    ## Dyad effects - Dislike
+    transpars> matrix[N_dyads, 2]:Td <- 
+      compose_noncentered( rep_vector(sigma_Td,2) , L_Rho_Td , Zd ),
+    matrix[2, N_dyads]:Zd ~ normal(0,1),
+    cholesky_factor_corr[2]:L_Rho_Td ~ lkj_corr_cholesky(2),
+    sigma_Td ~ exponential(1),
+    
+    ## compute correlation matrix dyad
+    gq> matrix[2,2]:Rho_T <<- Chol_to_Corr(L_Rho_T),
+    gq> matrix[2,2]:Rho_Td <<- Chol_to_Corr(L_Rho_T)
+  ),
+  data = d_list, chains=4, cores=4, iter=2000
+)
+```
+
+```{r}
+precis(m3, depth=3, pars=c("sigma_T","R"))
+```
+
+```{r}
+precis(m4, depth=3, pars=c("sigma_T","sigma_M", "R", "Rho_M", "Rho_T", "Rho_Td"))
+```
+```{r}
+m3_post <- extract.samples(m3)
+m4_post <- extract.samples(m4)
+
+reciprocity_constrast <- m3_post$sigma_M - m4_post$sigma_M[,1]
+
+ggplot() +
+  geom_density(aes(x=reciprocity_constrast)) +
+  geom_vline(xintercept = 0, linetype = 2) +
+  labs(title = "Contrast between Monk varying effect's sigma (>0 then m4 is better)")
+
+```
+
+```{r}
+raw_like_monk_effect <- with(m4_post, R[,,1])
+
+mean_p <- raw_like_monk_effect %>% apply(MARGIN=2, FUN=mean)
+p89interval <- raw_like_monk_effect %>% 
+  apply(MARGIN=2, FUN=PI) %>%
+  t
+raw_like_to_plot <- tibble(
+  p = mean_p,
+  p5 = p89interval[,1],
+  p94 = p89interval[,2]
+) %>% 
+  mutate(M = row_number() - 0.25,
+         param="like")
+
+raw_dislike_monk_effect <- with(m4_post, R[,,2])
+
+mean_p <- raw_dislike_monk_effect %>% apply(MARGIN=2, FUN=mean)
+p89interval <- raw_dislike_monk_effect %>% 
+  apply(MARGIN=2, FUN=PI) %>%
+  t
+raw_dislike_to_plot <- tibble(
+  p = mean_p,
+  p5 = p89interval[,1],
+  p94 = p89interval[,2]
+) %>% 
+  mutate(M = row_number() + 0.25,
+         param="dislike")
+
+raw_m4_like_monk_plot <- bind_rows(raw_like_to_plot, raw_dislike_to_plot) %>% 
+  ggplot() +
+  geom_point(aes(x = M, y = p, color=param)) +
+  geom_segment(
+    aes(x=M, xend=M, y=p5, yend=p94, color=param, group=param), 
+    alpha = 0.4, linewidth=2, lineend = "round"
+  ) +
+  scale_x_continuous(breaks = 1:N_monks) +
+  geom_hline(aes(yintercept=0), linetype=2) +
+  labs(title="Raw", y="odds") +
+  theme_light()
+
+raw_m4_like_monk_plot
+```
+
+```{r}
+to_plot <- inner_join(
+  raw_like_to_plot %>% transmute(M = M + 0.25, like_odds=p),
+  raw_dislike_to_plot %>% transmute(M = M - 0.25, dislike_odds=p),
+  by = "M"
+)
+raw_m4_like_monk_plot <- ggplot(to_plot) +
+  geom_point(aes(x = like_odds, y = dislike_odds)) +
+  geom_text(aes(x = like_odds, y = dislike_odds,label=M), nudge_x = -0.1) +
+  scale_x_continuous(limits = c(-2,2)) +
+  scale_y_continuous(limits = c(-2,2)) +
+  coord_fixed() +
+  labs(title="Raw") +
+  theme_light()
+
+raw_m4_like_monk_plot
+```
+
