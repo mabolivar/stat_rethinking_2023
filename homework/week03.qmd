@@ -1,0 +1,221 @@
+---
+title: "Homework- Week 03"
+format: html
+---
+
+```{r packages}
+#| message: false
+library(dagitty)
+library(rethinking)
+library(ggplot2)
+library(dplyr)
+library(purrr)
+```
+
+## Problem 01
+
+```{r}
+data("foxes")
+precis(foxes)
+```
+
+### DAG
+
+F is `avgfood`, G is `groupsize`, A is `area`, and W is `weight`.
+
+```{r}
+dag_foxes <- dagitty(
+  "dag {
+  A -> F
+  F -> G
+  F -> W
+  G -> W
+  }"
+)
+
+drawdag(dag_foxes)
+```
+
+**Use the backdoor criterion and estimate the total causal influence of A on F. What effect would increasing the area of a territory have on the amount of food inside it?**
+
+Using the backdoor criteria, the only path available is `A -> F` and there is no other backdoor paths.
+
+```{r}
+adjustmentSets(dag_foxes, exposure = 'A', outcome = 'F')
+```
+
+To estimate the **total** causal influence, we can build a simple model than relates `F` on `A`.
+
+```{r}
+model_01 <- quap(
+  alist(
+    avgfood ~ dnorm(mu, sigma),
+    mu <- alpha + beta * area,
+    alpha ~ dnorm(0.5, 1),
+    beta ~ dnorm(0, 0.5),
+    sigma ~ dexp(1)
+  ),
+  data = foxes
+)
+
+precis(model_01)
+```
+
+The total causal effect of an increase of one unit in the area of the territory into the avg. food is given by the parameter `beta`. Its 89% interval is 0.17 and 0.2 per unit of area.
+
+```{r}
+posterior_samples <- extract.samples(model_01)
+
+ggplot(data=posterior_samples) +
+  geom_density(aes(x=beta)) +
+  labs(title = "Posterior distribution of the causal effect of increase one unit of area\ninto the avg. food.")
+```
+
+## Problem 02
+
+Infer the **total** causal effect of adding food F to a territory on the weight W of foxes.
+
+```{r}
+drawdag(dag_foxes)
+```
+
+```{r}
+adjustmentSets(dag_foxes, exposure = "F", "W", effect = "total")
+```
+
+```{r}
+model_02 <- quap(
+  alist(
+    weight ~ dnorm(mu, sigma),
+    mu <- alpha + beta * avgfood,
+    alpha ~ dnorm(4, 10),
+    beta ~ dnorm(5, 10),
+    sigma ~ dexp(1)
+  ),
+  data = foxes
+)
+
+precis(model_02)
+```
+
+The **total** causal effect of increasing one unit on the avg.food is given by the beta parameter. Its 89% interval is -1.01 and 0.75.
+
+```{r}
+posterior_samples_02 <- extract.samples(model_02)
+
+dens(posterior_samples_02$beta)
+```
+
+### Can you calculate the causal effect by simulating an intervention
+
+on food?
+
+```{r}
+food_intervention <- seq(0, 1.3, by=0.1)
+percentiles <- c(0.5, 0.67, 0.89, 0.99)
+
+posterior_prediction_02 <- sim(
+  model_02, data=list(avgfood = food_intervention)
+  ) %>% 
+  apply(2, list)
+
+# Build data frame with mean and percentiles
+df_simulation_02 <- map2_df(
+  food_intervention, posterior_prediction_02,
+  .f=function(x,y) {
+    weight <- unlist(y)
+    mean_weight <- mean(weight)
+    map_df(percentiles, 
+           function(p){
+             interval <- PI(weight, prob = p)
+             tibble(
+               avgfood=x, 
+               weight = mean_weight,
+               percentile = p,
+               lower = interval[1], 
+               upper=interval[2])
+           }
+    )
+  }
+  )
+
+# Plot
+ggplot(df_simulation_02) +
+  geom_line(aes(x=avgfood, y=weight)) +
+  geom_ribbon(aes(x=avgfood, ymin=lower, ymax=upper, group=percentile), alpha = 0.3)
+```
+
+## Problem 03 {#problem-03}
+
+Infer the **direct** causal effect of adding food F to a territory on the weight W of foxes.
+
+```{r}
+adjustmentSets(dag_foxes, exposure = "F", outcome = "W", effect = "direct")
+```
+
+To infer the direct effect it is necessary to include the `group_size` variable. When stratifying this variable, it is possible to isolate the `avgfood` effect considering a given group size.
+
+Likewise, from a `group_size` variable point of view, stratifying by `avgfood` would help us to infer its **direct** and **total** effect into the `weight` (they are the same).
+
+```{r}
+model_03 <- quap(
+  alist(
+    weight ~ dnorm(mu, sigma),
+    mu <- alpha + beta_f * avgfood + beta_g * groupsize,
+    alpha ~ dnorm(4, 10),
+    beta_f ~ dnorm(5, 10),
+    beta_g ~ dnorm(0, 5),
+    sigma ~ dexp(1)
+  ),
+  data = foxes
+)
+
+precis(model_03)
+```
+
+The direct effect of `avgfood` into `weight` is given by the `beta_f` parameter. Its 89% interval is 1.93 and 5.76 increase on weight by each unit increase on the avgfood available.
+
+```{r}
+posterior_samples_03 <- extract.samples(model_03)
+dens(posterior_samples_03$beta_f)
+```
+
+### In light of your estimates from this problem and the previous one, what do you think is going on with these foxes?
+
+The latest result shows that when stratifying by `groupsize` the effect of avgfood is significant larger compared when there is no stratification. Without considering stratification, the total effect generated from the food availability is consumed by an increase in the wolf's group size. And the increase on the group size have a negative effect on the avg weight. Therefore, if we are able to control the number of wolfs in a group, we can see an increasing effect on the wolf weight when increasing the available food.
+
+## Problem 04 (Optional)
+
+Suppose there is an unobserved confound that influences F and G, like this:
+
+```{r}
+dag_foxes_u <- dagitty(
+  "dag {
+  U [unobserved]
+  A -> F
+  F -> G
+  F -> W
+  G -> W
+  U -> F
+  U -> G
+  }"
+)
+
+drawdag(dag_foxes_u)
+```
+
+Assuming the DAG above is correct, again estimate both the total and direct causal effects of F on W. What impact does the unobserved confound have?
+
+```{r}
+adjustmentSets(dag_foxes_u, exposure = "F", outcome = "W", effect = "total")
+```
+
+(The previous code chunk doesn't return any value)
+
+```{r}
+adjustmentSets(dag_foxes_u, exposure = "F", outcome = "W", effect = "direct")
+```
+
+In this case, it is not possible to compute the **total** effect of F on W because it would be necessary to stratify by the unobserved variable `U` or by the `G` variable. The first case is not possible due to the variable is unobserved. The second case lead us to estimate the **direct** effect.
+
+The **direct** effect would be the same as the one estimated at [Problem 03](#problem-03) section.

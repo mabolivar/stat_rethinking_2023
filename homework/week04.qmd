@@ -1,0 +1,247 @@
+---
+title: "Homework - Week 04"
+format: html
+---
+
+```{r packages}
+#| message: false
+library(rethinking)
+library(ggplot2)
+library(dplyr)
+library(purrr)
+library(dagitty)
+```
+
+## Question 01
+
+Revisit the marriage, age, and happiness collider bias example from Chapter 6. Run models m6.9 and m6.10 again (pages 178–179). Compare these two models using both PSIS and WAIC. Which model is expected to make better predictions, according to these criteria, and which model yields the
+correct causal inference?
+
+```{r marriage_dag}
+dag_marriage <- dagitty(
+  "dag {
+  H -> M
+  A -> M
+  }"
+)
+
+drawdag(dag_marriage)
+```
+
+
+Simulation steps
+
+(1)  Each year, 20 people are born with uniformly distributed happiness values.
+(2)  Each year, each person ages one year. Happiness does not change.
+(3)  At age 18, individuals can become married. The odds of marriage each year are proportional to an individual’s happiness.
+(4)  Once married, an individual remains married.
+(5)  After age 65, individuals leave the sample. (They move to Spain.)
+
+```{r}
+d <- sim_happiness( seed=1977 , N_years=1000 )
+precis(d)
+d2 <- d[ d$age>17 , ] # only adults
+d2$A <- ( d2$age - 18 ) / ( 65 - 18 )
+d2$mid <- d2$married + 1
+```
+
+
+
+```{r}
+
+m6.9 <- quap(
+  alist(
+    happiness ~ dnorm( mu , sigma ),
+    mu <- a[mid] + bA*A,
+    a[mid] ~ dnorm( 0 , 1 ) ,
+    bA ~ dnorm( 0 , 2 ) ,
+    sigma ~ dexp(1)
+  ) , data=d2 )
+precis(m6.9,depth=2)
+
+
+```
+
+
+
+```{r}
+m6.10 <- quap(
+  alist(
+    happiness ~ dnorm( mu , sigma ),
+    mu <- a + bA*A,
+    a ~ dnorm( 0 , 1 ),
+    bA ~ dnorm( 0 , 2 ),
+    sigma ~ dexp(1)
+  ) , data=d2 )
+
+precis(m6.10)
+
+```
+
+
+```{r}
+compare( m6.9 ,m6.10 , func=WAIC )
+```
+```{r}
+plot(compare( m6.9 ,m6.10 , func=WAIC ))
+```
+
+
+```{r}
+compare( m6.9 ,m6.10 , func=PSIS )
+```
+Model `m6.9` would be better to predict happiness due to it stratifies by the marriage variable. On the other, the correct inference model correspond to `m6.10` in which stratifying by Age doesn't have any effect on Happiness.
+
+## Question 02
+
+Reconsider the urban fox analysis from last week’s homework. On the
+basis of PSIS and WAIC scores, which combination of variables best predicts
+body weight (W, weight)? What causal interpretation can you assign each
+coefficient (parameter) from the best scoring model?
+
+```{r}
+data("foxes")
+precis(foxes)
+```
+
+
+F is `avgfood`, G is `groupsize`, A is `area`, and W is `weight`.
+
+```{r}
+dag_foxes <- dagitty(
+  "dag {
+  A -> F
+  F -> G
+  F -> W
+  G -> W
+  }"
+)
+
+drawdag(dag_foxes)
+```
+
+
+`model_02` infers the **total** causal effect of adding food F to a territory on the weight W of foxes.
+
+```{r}
+model_02 <- quap(
+  alist(
+    weight ~ dnorm(mu, sigma),
+    mu <- alpha + beta * avgfood,
+    alpha ~ dnorm(4, 10),
+    beta ~ dnorm(5, 10),
+    sigma ~ dexp(1)
+  ),
+  data = foxes
+)
+
+precis(model_02)
+```
+
+`model_03` produces the best prediction
+
+```{r}
+model_03 <- quap(
+  alist(
+    weight ~ dnorm(mu, sigma),
+    mu <- alpha + beta_f * avgfood + beta_g * groupsize,
+    alpha ~ dnorm(4, 10),
+    beta_f ~ dnorm(5, 10),
+    beta_g ~ dnorm(0, 5),
+    sigma ~ dexp(1)
+  ),
+  data = foxes
+)
+
+model_04 <- quap(
+  alist(
+    weight ~ dnorm(mu, sigma),
+    mu <- alpha + beta_f * avgfood + beta_g * groupsize + beta_a * area,
+    alpha ~ dnorm(4, 10),
+    beta_f ~ dnorm(5, 10),
+    beta_g ~ dnorm(0, 5),
+    beta_a ~ dnorm(3, 2),
+    sigma ~ dexp(1)
+  ),
+  data = foxes
+)
+
+plot(compare(model_02, model_03, model_04))
+```
+
+```{r}
+precis(model_03)
+```
+
+The latest result shows that when stratifying by `groupsize` the effect of avgfood is significant larger ($3.84$) compared when there is no stratification ($-0.13$). Without considering stratification, the total effect generated from the food availability is consumed by an increase in the wolf's group size. And the increase on the group size have a negative effect on the avg weight. Therefore, if we are able to control the number of wolfs in a group, we can see an increasing effect on the wolf weight when increasing the available food.
+
+## Problem 03
+
+Build a predictive model of the relationship show on the cover of the book,
+the relationship between the timing of cherry blossoms and March temperature in the same year. The data are found in data(cherry_blossoms).
+Consider at least two different models (functional relationships) to predict
+doy with temp. You could for example compare a linear model with a quadratic model. Compare them with PSIS or WAIC.
+Suppose March temperatures reach 9 degrees by the year 2050. What does
+your best model predict for the predictive distribution of the day-in-year that
+the cherry trees will blossom?
+
+
+```{r}
+data("cherry_blossoms")
+precis(cherry_blossoms)
+df_blossoms <- cherry_blossoms %>% 
+  select(doy, temp) %>% 
+  filter(complete.cases(.)) %>%
+  mutate(temp2 = temp ^ 2,
+         temp3 = temp ^ 3)
+```
+
+
+```{r}
+m3.1 <- quap(
+  alist(
+    doy ~ dnorm(mu, sigma),
+    mu <- a,
+    a ~ dnorm(100, 10),
+    sigma ~ dexp(5)
+  ),
+  data = df_blossoms
+)
+precis(m3.1)
+```
+
+```{r}
+m3.2 <- quap(
+  alist(
+    doy ~ dnorm(mu, sigma),
+    mu <- a + b * temp,
+    a ~ dnorm(100, 10),
+    b ~ dnorm(0, 15),
+    sigma ~ dexp(5)
+  ),
+  data = df_blossoms
+)
+precis(m3.2)
+```
+```{r}
+
+m3.3 <- quap(
+  alist(
+    doy ~ dnorm(mu, sigma),
+    mu <- a + b * temp + b2 * temp2,
+    a ~ dnorm(100, 10),
+    b ~ dnorm(0, 15),
+    b2 ~ dnorm(0, 15),
+    sigma ~ dexp(5)
+  ),
+  data = df_blossoms
+)
+precis(m3.3)
+```
+
+```{r}
+compare(m3.1, m3.2, m3.3, func = PSIS)
+```
+```{r}
+plot(compare(m3.1, m3.2, m3.3, func = PSIS))
+```

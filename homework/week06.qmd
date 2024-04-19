@@ -1,0 +1,276 @@
+---
+title: "Homework - Week 06"
+format:
+  html:
+    embed-resources: true
+---
+
+```{r}
+#| warning: false
+#| message: false
+library(rethinking)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(dagitty)
+# library(patchwork)
+```
+
+Conduct a prior predictive simulation for the Reedfrog model. By this I mean to
+simulate the prior distribution of tank survival probabilities αj. Start by using this prior:
+
+$$
+\begin{align}
+\bar{\alpha}_j \sim Normal(\bar{\alpha}, \sigma) \\
+\bar{\alpha} \sim Normal(0, 1) \\
+\sigma \sim Exponential(1)\\
+\end{align}
+$$
+```{r}
+n <- 1e4
+sigma <- rexp(n,10)
+abar <- rnorm(n,0,1)
+aT <- rnorm(n,abar,sigma)
+dens(inv_logit(aT),xlim=c(0,1),adj=0.1,lwd=4,col=2)
+```
+
+
+
+```{r}
+data("reedfrogs")
+d <- reedfrogs %>% 
+  transmute(T= row_number(),
+            S = surv,
+            G = if_else(size=="big",2,1),
+            P = if_else(pred=="pred",1,0),
+            D = density,
+            Ds = standardize(log(D)))
+```
+
+```{r}
+#| output: false
+#| message: false
+#| cache: true
+m1.1 <- ulam(
+  alist(
+    S ~ dbinom(D, p),
+    logit(p) <- a[T],
+    a[T] ~ dnorm(a_bar, sigma),
+    a_bar ~ dnorm(0, 1),
+    sigma ~ dexp(1)
+  ),
+  data = d, chains = 4, cores = 4, log_lik = T
+)
+
+precis(m1.1, depth = 2)
+```
+Train other models with different priors
+```{r}
+#| output: false
+#| cache: true
+#| message: false
+m1.2 <- ulam(
+  alist(
+    S ~ dbinom(D, p),
+    logit(p) <- a[T],
+    a[T] ~ dnorm(a_bar, sigma),
+    a_bar ~ dnorm(0, 1),
+    sigma ~ dexp(10)
+  ),
+  data = d, chains = 4, cores = 4, log_lik = T
+)
+m1.3 <- ulam(
+  alist(
+    S ~ dbinom(D, p),
+    logit(p) <- a[T],
+    a[T] ~ dnorm(a_bar, sigma),
+    a_bar ~ dnorm(0, 1),
+    sigma ~ dexp(0.1)
+  ),
+  data = d, chains = 4, cores = 4, log_lik = T
+)
+
+```
+
+
+```{r extract_priors}
+#| output: false
+#| message: false
+#| cache: true
+set.seed(9392)
+prior_m1.1 <- extract.prior(m1.1)
+prior_m1.2 <- extract.prior(m1.2)
+prior_m1.3 <- extract.prior(m1.3)
+```
+
+```{r}
+models <- list(prior_m1.1, prior_m1.2, prior_m1.3)
+sigmas <- c(1, 10, 0.1) %>% as.character()
+
+df_priors_wsigma <- map2_df(
+  models, sigmas,
+  .f=function(model,sigma){
+    p_samples <- inv_logit(model$a)
+    mean_p <- p_samples %>% apply(MARGIN=2, FUN=mean)
+    p89interval <- p_samples %>% apply(MARGIN=2, FUN=PI) %>% t
+    tibble(
+      sigma = sigma,
+      p = mean_p,
+      p5 = p89interval[,1],
+      p94 = p89interval[,2]
+    ) %>% 
+      mutate(T = row_number())
+  })
+```
+
+
+```{r}
+ggplot(df_priors_wsigma) +
+  geom_segment(
+    aes(x=T, xend=T, y=p5, yend=p94, color=sigma, group=paste(T, sigma)), 
+    alpha = 0.4, linewidth=2, lineend = "round"
+  ) +
+  geom_point(aes(x=T, y = p, color=sigma)) +
+  labs(y="Survival rate (p)") +
+  facet_grid(sigma ~ .) +
+  theme_minimal()
+```
+
+Be sure to transform the αj values to the probability scale for plotting and summary.
+How does increasing the width of the prior on σ change the prior distribution of αj?
+You might try Exponential(10) and Exponential(0.1) for example.
+
+## Problem 02
+
+2. Revisit the Reedfrog survival data, data(reedfrogs). Start with the varying effects model from the book and lecture. Then modify it to estimate the causal effects of the treatment variables `pred` and `size`, including how size might modify the effect of predation. An easy approach is to estimate an effect for each combination of `pred` and `size`. Justify your model with a DAG of this experiment.
+
+```{r}
+dag_reedfrogs <- dagitty(
+  "dag {
+  T -> S
+  D -> S
+  G -> S
+  P -> S
+  }"
+)
+
+drawdag(dag_reedfrogs)
+
+```
+
+
+```{r}
+#| output: false
+#| message: false
+#| cache: true
+m2.1 <- ulam(
+  alist(
+    S ~ dbinom( D , p ) ,
+    logit(p) <- a[T] + bP[G]*P ,
+    bP[G] ~ dnorm( 0 , 0.5 ),
+    a[T] ~ dnorm( a_bar , sigma ) ,
+    a_bar ~ dnorm( 0 , 1.5 ) ,
+    sigma ~ dexp( 1 )
+  ), data=d , chains=4, cores=4,  log_lik=TRUE )
+```
+```{r}
+precis(m2.1, pars=c("bP", "sigma"), depth = 2)
+```
+
+- `extract.samples`: Extracts or draw samples from fit models.
+- `link`: Computes inverse-link linear model values for map and map2stan samples.
+- `sim`: Simulates posterior observations for map and map2stan model fits.
+
+```{r}
+pred <- d$P %>% unique() %>% sort # 0,1
+size <- d$G %>% unique() %>% sort # 1,2
+
+grid <- expand_grid(pred, size) %>% 
+  mutate(label = paste0("P",pred, "_", "G",size))
+p_posterior <- map2(
+  .x=grid$pred, .y=grid$size, 
+  .f=function(x,y){
+    d_tmp <- d %>% 
+      split(.$T) %>% 
+      map2_df(
+      ., names(.), 
+      .f=function(row, tank) tibble(
+        T=as.integer(tank), D=1, P=rep(x, row$D), G=rep(y, row$D))
+      )
+    link(m2.1, data = as.list(d_tmp))
+  })
+names(p_posterior) <- grid$label
+str(p_posterior)
+```
+```{r}
+# How size might modify the effect of predator
+
+marginalized_contrast <- p_posterior[["P1_G2"]] - p_posterior[["P1_G1"]]
+
+plot_marginalized_contrast <- ggplot() +
+  geom_density(aes(x=as.vector(marginalized_contrast) * 100)) +
+  labs(x = "Percentual points (pp)",
+       title = "Marginalized Direct effect - Contrast between big - small tadpoles (p)")
+
+plot_marginalized_contrast
+```
+
+```{r}
+d %>% group_by(G) %>% summarise(S_rate = sum(S)/sum(D))
+```
+
+## Problem 03
+
+3. Now estimate the causal effect of density on survival. Consider whether `pred`
+modifies the effect of density. There are several good ways to include density in
+your Binomial GLM. You could treat it as a continuous regression variable (possibly standardized). Or you could convert it to an ordered category (with three levels). Compare the σ (tank standard deviation) posterior distribution to σ from your
+model in Problem 2. How are they different? Why?
+
+```{r}
+#| output: false
+#| message: false
+#| cache: true
+#| echo: false
+d$Pi <- d$P + 1
+m3.1 <- ulam(
+  alist(
+    S ~ dbinom( D , p ) ,
+    logit(p) <- a[T] + bP[G]*P + bDs[Pi] * Ds,
+    bP[G] ~ dnorm( 0 , 0.5 ),
+    bDs[Pi] ~ dnorm( 0 , 0.5 ),
+    a[T] ~ dnorm( a_bar , sigma ) ,
+    a_bar ~ dnorm( 0 , 1.5 ) ,
+    sigma ~ dexp( 1 )
+  ), data=d , chains=4, cores=4,  log_lik=TRUE )
+```
+
+```{r}
+precis(m3.1, pars=c("bP", "bDs", "sigma"), depth = 2)
+```
+
+
+```{r}
+compare(m2.1, m3.1)
+```
+
+
+```{r}
+samples_m2.1 <- extract.samples(m2.1)
+samples_m3.1 <- extract.samples(m3.1)
+```
+
+```{r}
+to_plot <- bind_rows(
+  tibble(label="model_PS", sigma = samples_m2.1$sigma),
+  tibble(label="model_PSD", sigma = samples_m3.1$sigma)
+)
+
+ggplot(data=to_plot) +
+  geom_density(aes(x=sigma, color=label))
+```
+
+```{r}
+dens(samples_m2.1$sigma - samples_m3.1$sigma)
+```
+

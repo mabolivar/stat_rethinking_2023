@@ -1,0 +1,393 @@
+---
+title: "Homework - Week 05"
+format:
+  html:
+    embed-resources: true
+---
+
+```{r}
+#| warning: false
+#| message: false
+library(rethinking)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(dagitty)
+library(patchwork)
+```
+
+
+## Problem 01
+
+The data in data(NWOGrants) are outcomes for scientific funding applications
+for the Netherlands Organization for Scientific Research (NWO) from 2010–2012 (see van der Lee and Ellemers doi:10.1073/pnas.1510159112). These data have a structure similar to the UCBAdmit data discussed in Chapter 11 and in lecture. There are applications and each has an associated gender (of the lead researcher). But instead of departments, there are disciplines. Draw a DAG for this sample. Then use the backdoor criterion and a binomial GLM to estimate the TOTAL causal effect of gender on grant awards.
+
+```{r}
+data(NWOGrants)
+df_grants <- NWOGrants %>% 
+  mutate(gender = if_else(gender == "m", 1, 2),
+         discipline_label = discipline,
+         discipline = as.numeric(discipline)) # male = 1, female = 2
+
+vct_discipline_mapper <- df_grants %>% 
+  distinct(discipline, discipline_label) %>% 
+  arrange(discipline) %>% 
+  pull(discipline_label) %>% as.character()
+df_grants
+```
+
+### Notation
+
+`discipline` -> D
+`gender` -> G
+`applications` -> A
+`awards` -> W
+
+The following DAG shows the relationships between the gender, discipline and awards variables. 
+
+```{r}
+dag_grants <- dagitty(
+  "dag {
+  G -> D
+  G -> W
+  D -> W
+  }"
+)
+
+drawdag(dag_grants)
+```
+
+Using the backdoor criterion in order to estimate the **total** causal effect of gender on grant awards means to use and empty adjustment set. 
+
+```{r}
+dagitty::adjustmentSets(
+  dag_grants, exposure = "G", outcome = "W", effect = "total"
+  )
+```
+
+```{r}
+#| cache: true
+m1.1 <- ulam(
+  flist = alist(
+    awards ~ dbinom(applications, p),
+    logit(p) <- a[gender],
+    a[gender] ~ dnorm(0, 1.5)
+  ),
+  data = df_grants, chains = 4
+)
+
+precis(m1.1, depth = 2)
+
+```
+
+```{r}
+#| message: false
+#| cache: true
+set.seed(23423)
+prior <- extract.prior(m1.1)
+posterior <- extract.samples(m1.1)
+```
+
+```{r}
+df_prior <- inv_logit(prior$a) %>% 
+  as.data.frame() %>% 
+  setNames(c("male", "female")) %>% gather(key = "gender", value = "p") %>% 
+  mutate(source="prior")
+
+ggplot(data = df_prior) +
+  geom_density(aes(x=p, color=gender)) +
+  facet_grid(. ~ source) +
+  labs(title = "Prior density function for p estimand")
+```
+```{r}
+df_posterior <- inv_logit(posterior$a) %>% as.data.frame() %>% setNames(c("male", "female")) 
+
+to_plot <- df_posterior %>% gather(key = "gender", value = "p") %>% 
+  mutate(source="posterior")
+
+ggplot(data = to_plot) +
+  geom_density(aes(x=p, color=gender)) +
+  facet_grid(. ~ source) +
+  labs(title = "Posterior density function for p estimand")
+```
+
+```{r}
+df_prior <- inv_logit(prior$a) %>% 
+  as.data.frame() %>% 
+  setNames(c("male", "female")) %>%
+  mutate(source="prior")
+
+df_posterior <- inv_logit(posterior$a) %>% 
+  as.data.frame() %>% 
+  setNames(c("male", "female")) %>% 
+  mutate(source="posterior")
+
+to_plot <- bind_rows(df_prior, df_posterior) %>% gather(key = "gender", value = "p", -source) %>% mutate(source = factor(source, levels=unique(source)))
+
+ggplot(data = to_plot) +
+  geom_density(aes(x=p, color=gender)) +
+  facet_grid(. ~ source, scales = "free_y") +
+  labs(title = "Prior density function for p estimand") +
+  theme(legend.position = "top", 
+        legend.title = element_blank())
+```
+
+```{r}
+df_total_contrast <- df_posterior %>% 
+  mutate(contrast = male - female)
+precis(df_total_contrast)
+```
+The contrast between the male and female estimates shows a difference between 
+1pp and 5pp favoring man for grant awards within a 89% interval. 
+
+```{r}
+plot_total_contrast <- ggplot(data=df_total_contrast) +
+  geom_density(aes(x=contrast * 100)) +
+  geom_vline(aes(xintercept=0), linetype = 2) +
+  labs(x = "Percentual points (pp)",
+       title = "Total - Contrast between male - female (p)")
+plot_total_contrast
+```
+
+
+### Posterior validation check
+
+```{r}
+postcheck(m1.1)
+```
+
+## Problem 02
+Now estimate the DIRECT causal effect of gender on grant awards. Use the same
+DAG as above to justify one or more binomial models. Compute the average direct
+causal effect of gender, weighting each discipline in proportion to the number of
+applications in the sample. Refer to the marginal effect example in Lecture 9 for
+help.
+
+### Model `gender` + `discipline`
+
+```{r}
+#| cache: true
+m2.1 <- ulam(
+  flist = alist(
+    awards ~ dbinom(applications, p),
+    logit(p) <- a[gender] + beta[discipline],
+    a[gender] ~ dnorm(0, 1.5),
+    beta[discipline] ~ dnorm(0, 1.5)
+  ),
+  data = df_grants, chains = 4
+)
+precis(m2.1, depth = 2)
+
+```
+
+
+```{r}
+#| message: false
+#| cache: true
+set.seed(93887)
+m2.1_prior <- extract.prior(m2.1)
+m2.1_posterior <- extract.samples(m2.1)
+```
+
+```{r}
+df_m2.1_prior <- inv_logit(m2.1_prior$a) %>% as.data.frame() %>% setNames(c("male", "female")) %>% gather(key = "gender", value = "p") %>% 
+  mutate(source="prior")
+
+ggplot(data = df_m2.1_prior) +
+  geom_density(aes(x=p, color=gender)) +
+  facet_grid(. ~ source) +
+  labs(title = "Prior density function for p estimand")
+```
+
+
+```{r}
+df_m2.1_posterior <- inv_logit(m2.1_posterior$a) %>% as.data.frame() %>% setNames(c("male", "female")) 
+
+to_plot <- df_m2.1_posterior %>% gather(key = "gender", value = "p") %>% 
+  mutate(source="posterior")
+
+ggplot(data = to_plot) +
+  geom_density(aes(x=p, color=gender)) +
+  facet_grid(. ~ source) +
+  labs(title = "Posterior density function for p estimand")
+```
+
+
+```{r}
+df_m2.1_total_contrast <- df_m2.1_posterior %>% 
+  mutate(contrast = male - female)
+precis(df_m2.1_total_contrast)
+```
+The contrast between the male and female estimands shows a difference between 
+0pp and 6pp favoring man for grant awards within a 89% interval. 
+
+```{r}
+ggplot(data=df_m2.1_total_contrast) +
+  geom_density(aes(x=contrast * 100)) +
+  geom_vline(aes(xintercept=0), linetype = 2) +
+  labs(x = "Percentual points (pp)",
+       title = "Direct effect - Contrast between male - female (p)")
+```
+
+
+#### Posterior validation check
+
+```{r}
+postcheck(m2.1)
+```
+
+
+### Model `gender` with `discipline` (marginal effects)
+
+```{r}
+#| cache: true
+m2.2 <- ulam(
+  flist = alist(
+    awards ~ dbinom(applications, p),
+    logit(p) <- a[gender, discipline],
+    matrix[gender, discipline]:a ~ dnorm(0, 1.5)
+  ),
+  data = df_grants, chains = 4
+)
+precis(m2.2, depth = 3)
+
+```
+
+ > ToDo: Check the healthy plots for montecarlo sampling
+
+```{r}
+#| message: false
+#| cache: true
+set.seed(2385012)
+m2.2_prior <- extract.prior(m2.2)
+m2.2_posterior <- extract.samples(m2.2)
+```
+
+```{r}
+# Manage 3d matrix
+col_names <- c( "gender", "discipline")
+df_m2.2_posterior <- map(.x=dim(m2.2_posterior$a)[-1], function(x) 1:x) %>% 
+  setNames(col_names) %>% expand_grid(!!!.) %>% 
+  as_tibble() %>% 
+  mutate(a = map2(gender, discipline, function(x,y) m2.2_posterior$a[, x, y])) %>% 
+  unnest(cols = a) %>% 
+  mutate(p = inv_logit(a),
+         source = "posterior",
+         gender = if_else(gender == 1, "male", "female"),
+         discipline = map_chr(discipline, .f=~vct_discipline_mapper[.x]))
+
+ggplot(data = df_m2.2_posterior) +
+  geom_density(aes(x=p, color=gender, group=gender)) +
+  facet_wrap(. ~ discipline) +
+  labs(title = "Posterior density function for p estimand")
+```
+
+
+
+```{r}
+df_m2.2_total_contrast <- df_m2.2_posterior %>% 
+  select(-a, -source) %>% 
+  group_by(gender, discipline) %>% 
+  mutate(sample=row_number()) %>% 
+  ungroup() %>% 
+  spread(key = gender, value=p) %>% 
+  mutate(contrast = male - female)
+```
+
+```{r}
+ggplot(data=df_m2.2_total_contrast) +
+  geom_density(aes(x=contrast * 100)) +
+  geom_vline(aes(xintercept=0), linetype = 2) +
+  facet_wrap(. ~ discipline) +
+  labs(x = "Percentual points (pp)",
+       title = "Direct effect - Contrast between male - female (p)")
+```
+
+#### Marginal effect over disciplines
+
+```{r}
+df_applications_per_discipline <- df_grants %>% 
+  group_by(discipline) %>% 
+  summarise(applications = sum(applications), .groups = "drop")
+
+# Simulate all applications were men
+p_male <- link(
+  m2.2,
+  data=df_applications_per_discipline %>% mutate(gender=1) %>% as.list
+  )
+# Simulate all applications were women
+p_female <- link(
+  m2.2,
+  data=df_applications_per_discipline %>% mutate(gender=2) %>% as.list
+  )
+
+dens(p_male - p_female)
+```
+
+
+#### Post stratification
+
+```{r}
+# number of applicatons to simulate
+total_apps <- df_grants %>% pull(applications) %>% sum
+
+# number of applications per department
+apps_per_dept <- sapply( 1:9 , function(i)
+sum(df_grants$applications[df_grants$discipline==i]) )
+# simulate as if all apps from men
+p_male <- link(m2.2,data=list(
+ discipline=rep(1:9,times=apps_per_dept),
+ applications=rep(1,total_apps),
+ gender=rep(1,total_apps)))
+# simulate as if all apps from woman
+p_female <- link(m2.2,data=list(
+ discipline=rep(1:9,times=apps_per_dept),
+ applications=rep(1,total_apps),
+ gender=rep(2,total_apps)))
+# summarize
+marginalized_contrast = p_male - p_female
+
+plot_marginalized_contrast <- ggplot() +
+  geom_density(aes(x=as.vector(marginalized_contrast) * 100)) +
+  labs(x = "Percentual points (pp)",
+       title = "Marginalized Direct effect - Contrast between male - female per discipline (p)")
+
+plot_marginalized_contrast
+```
+
+```{r}
+precis(tibble(marginalized_contrast = as.vector(marginalized_contrast)))
+```
+
+```{r}
+plot_direct_effect_per_discipline <- ggplot(data=df_m2.2_total_contrast) +
+  geom_density(aes(x=contrast * 100, color = discipline), linewidth=1) +
+  geom_vline(aes(xintercept=0), linetype = 2) +
+  labs(x = "Percentual points (pp)",
+       title = "Direct effect - Contrast between male - female per discipline (p)")
+plot_direct_effect_per_discipline
+```
+
+
+#### Posterior validation check
+
+```{r}
+postcheck(m2.2)
+```
+
+## Problem 03
+
+Considering the total effect (problem 1) and direct effect (problem 2) of gender, what causes contribute to the average difference between women and men in **award rate** in this sample? It is not necessary to say whether or not there is evidence of discrimination or the presence or absence of unobserved confounds (which are likely!).
+Simply explain how the direct effects you have estimated make sense (or not) of the total effect.
+
+```{r}
+(plot_total_contrast | plot_marginalized_contrast) / plot_direct_effect_per_discipline
+```
+
+The total effect plot (top-left) shows that men seem to be advantages for grant awards. Likewise, looking at the marginalized direct effect (top-right), it is possible to see that a great area of the contrast provides advantages to men. When looking the direct effect's contrast at discipline level, it is possible to see that some areas like Social Science, Medical Science and Earth and Life Science tend to favor men compared to woman. On the other hand, some of these effect is balanced by other disciplines in which women is favored (e.g. Humanities, Technical Science or Interdisciplinary research). 
+
+
+
+
+

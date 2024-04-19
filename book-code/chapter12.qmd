@@ -1,0 +1,16 @@
+---
+title: "Chapter 12"
+format: html
+---
+
+```{r}
+library(rethinking)
+```
+
+```{r}
+pbar <- 0.7 
+theta <- 1
+curve( dbeta2(x,pbar,theta) , from=0 , to=1,  xlab="probability" , ylab="Density")
+
+```
+

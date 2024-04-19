@@ -36,4 +36,8 @@ vignettes/*.pdf
 *.knit.md
 
 # R Environment Variables
-.Renviron
+
+# Cache folder
+*figure-html/
+
+.DS_Store
